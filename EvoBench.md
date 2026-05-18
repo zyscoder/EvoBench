@@ -234,6 +234,25 @@ CLI / Editor (入口)
 | **—** | **`Bus` 事件总线** (bus/) | Effect PubSub 跨组件通信 |
 | **—** | **`sub-agent` (tool: task)** (tool/task.ts) | 递归启动子 Session, 通过 Bus 交换上下文 |
 
+> **⚠️ 关键澄清: System Prompt ≠ 任务编排**
+>
+> 在 Opencode 中, **System Prompt 是静态输入** (identity + context + constraints), 由四部分拼接:
+> 1. `agent.prompt` (或 provider default prompt) — Agent 身份/行为基础
+> 2. `env` — 环境信息 (模型名、工作目录、日期等)
+> 3. `instructions` — 来自 CLAUDE.md / AGENTS.md 等文件的指令
+> 4. `skills` — 可用 skill 描述
+>
+> **System Prompt 本身不执行也不编排任务。** 它只是一个输入到 LLM 的静态文本块。
+>
+> **任务编排 (Orchestration) 由以下机制共同实现:**
+> - **User Message**: 实际的任务描述 (来自用户输入)
+> - **Message History**: 先前的对话轮次 (包括工具调用记录)
+> - **Available Tools**: Agent 权限决定可用的工具集
+> - **runLoop 控制流**: `prompt.ts` 中的 while 循环决定继续/停止/compaction
+> - **LLM Internal Reasoning**: 规划内化于 LLM 的推理链中, 通过 tool calls 逐步执行
+>
+> 这意味着在归因时, "规划能力差"不能归因于 System Prompt, 而应归因于 LLM 本身或工具配置。
+
 ##### Opencode 新增的独特组件
 
 | 组件 | 文件 | 职责 |
@@ -262,7 +281,8 @@ CLI / Editor (入口)
 | **Compaction** | 溢出前的消息列表 | 压缩后的消息列表 | 溢出前 token 数, PRUNE_MINIMUM 触达率, 摘要 token 数, 摘要轮次 | 摘要信息损失率, 关键上下文保留度 |
 | **Agent.Service** | 任务描述, 上下文 | Agent.Info (含权限/模型/温度) | Agent 匹配准确率, 模型覆盖度 | Agent 选择合理性 |
 | **ToolRegistry** | Agent.Info, 模型信息 | 过滤后的 Tool.Def[] | 可用工具数, 被权限过滤掉工具数, MCP 工具数 | 工具集完备性, 多余工具比 |
-| **System Prompt 合成** | agent.prompt + env + instructions + skills | 最终 system message | Prompt 总长度, 各模块占比, 插件 transform 次数 | Prompt 结构完整性, 指令清晰度 |
+| **System Prompt 合成** | agent.prompt + env + instructions + skills | 静态 system message 数组 | Prompt 总长度, 各模块占比(env/instructions/skills/agent), 插件 transform 次数, CLAUDE.md 文件数量 | Prompt 结构完整性, 指令清晰度, 各模块一致性 |
+| **任务编排 (runLoop)** | user message + 消息历史 + 可用工具 + agent 配置 | LLM stream + tool call 执行序列 | 循环轮次, 工具调用序列, LLM stop/continue 决策, 信息累积曲线, 死胡同检测 | 编排合理性, 工具使用策略, 收敛速度 |
 | **SessionLLM (LLM Call)** | system + 消息历史 + 工具定义 | LLM Stream (text + tool_calls) | Token 消耗 (输入/输出/思考), 首 token 延迟, 总延迟, provider 重试次数, 超时次数 | 响应格式合规性, 思考链质量, 工具调用格式正确性 |
 | **Tool 执行** (内置) | Tool 参数 (Effect Schema 校验) | Tool 执行结果 | 执行成功率, 平均耗时, 超时率, 错误类型分布, 输出截断率 | 结果与任务的匹配度, 信息增益 |
 | **Tool 执行** (MCP) | MCP 协议请求 | MCP 协议响应 | MCP 连接状态, 调用成功率, 认证失败次数, Server 主动关闭次数 | MCP Server 稳定性 |
@@ -397,15 +417,19 @@ CLI / Editor (入口)
 | Token 利用率 | 当前上下文 token 数 / 模型 context window 上限 | `TokenUtilization` (0~1) | <0.3: 窗口浪费; 0.3-0.7: 合理; >0.9: 溢出风险 |
 | 保护工具保留率 | compaction 后原应保护的重要工具结果是否被保留 | `ProtectedToolRetention` (0~1) | 保留的关键工具结果数 / 应有的总数 |
 
-##### 3.3.1.3 System Prompt 合成
+##### 3.3.1.3 System Prompt 合成 (静态输入)
+
+> **重要**: System Prompt 是**静态文本输入**, 不是任务编排器。它只提供 agent 身份、环境上下文、instruction 文件和 skill 描述。**任务编排由 runLoop + LLM 推理 + 工具可用性共同驱动**。因此, 即使 System Prompt 质量完美, 也不能保证编排合理; 同样, 编排问题不应归因于 System Prompt。
 
 | 评估维度 | 评估方法 | 量化指标 | 计算公式/判定规则 |
 |---------|---------|---------|----------------|
-| **Prompt 结构完整性** | 规则检查: prompt 是否包含以下必需模块: agent.prompt, 环境信息, task 约束, 输出格式 | `StructureScore` (0~1) | 含有的必要模块数 / 总必要模块数 |
+| **结构完整性** | 规则检查: prompt 包含 agent.prompt/环境/instructions/skills 四大部分 | `StructureScore` (0~1) | 含有的必要模块数 / 4 |
 | 指令清晰度 | LLM-as-Judge: 指令是否具体、无歧义、可执行 | `ClarityScore` (0~1) | 1: 清晰具体; 0.5: 有模糊表述; 0: 指令缺失或矛盾 |
 | 上下文注入比例 | Skill/知识库内容占 prompt 总长度的比例 | `ContextInjectRatio` (0~1) | (skill 内容 + 知识库内容) / 总 prompt 长度 |
 | 插件 transform 质量 | 检查 plugin `experimental.chat.system.transform` 是否引入了有害或矛盾的指令 | `TransformQuality` (0~1) | LLM-as-Judge: 插件增加的内容是否与系统指令一致 |
-| **Prompt 冗余度** | 检查 prompt 中是否存在重复指令或相互矛盾的段落 | `PromptRedundancy` (0~1) | 冗余段落数 / 总段落数; >0.3 标记为高冗余 |
+| **冗余度** | 检查 prompt 中是否存在重复指令或相互矛盾的段落 | `PromptRedundancy` (0~1) | 冗余段落数 / 总段落数; >0.3 标记为高冗余 |
+| 指令与任务匹配度 | System Prompt 中的指令是否与用户请求的任务类型匹配 | `TaskAlignment` (0~1) | LLM-as-Judge: 指令内容与任务的适配性 |
+| 与 agent 身份一致性 | agent.prompt 描述的 agent 角色与实际任务需要的角色是否一致 | `AgentRoleFit` (0~1) | 例如用 explore agent 做代码修改任务 → 低分 |
 
 ##### 3.3.1.4 Agent 行为分析 (核心维度)
 
@@ -617,16 +641,23 @@ THEN 端到端失败归因于组件 A
 | AgentMatch = 0 (选择了错误的 agent) AND IntentPreserve ≥ 0.8 | Agent 选择错误 — agent 配置或默认 agent 设置不当 | 高 (0.80) |
 | AttachmentSuccess < 0.7 | 文件/附件处理失败 — createUserMessage 的附件解析逻辑有 bug | 中高 (0.75) |
 
-##### 规则组 B: System Prompt 合成失败
+##### 规则组 B: System Prompt 合成失败 (静态输入质量问题)
+
+> **注意**: System Prompt 只是静态文本输入。这里的失败指"给 LLM 的输入质量差", 而非"编排/规划能力差"。编排问题应在规则组 C 中处理。
 
 | 观测条件 (Shadow Eval 指标) | 归因结论 | 置信度 |
 |---------------------------|---------|-------|
-| StructureScore < 0.6 (必需模块缺失) AND ToolSelectionAccuracy ≥ 0.7 | System prompt 结构不完整 — agent.prompt 或 skill 注入部分缺失 | 高 (0.85) |
-| ClarityScore < 0.6 AND InstructionClarity < 0.6 | 指令模糊 — agent.prompt 或 env instruction 表述不清 | 高 (0.80) |
+| StructureScore < 0.6 (四模块缺失) AND ToolSelectionAccuracy ≥ 0.7 | System prompt 结构不完整 — agent.prompt 或 skill/instruction 注入部分缺失 | 高 (0.85) |
+| ClarityScore < 0.6 AND InstructionClarity < 0.6 | 指令模糊 — agent.prompt 或 instruction 文件表述不清 | 高 (0.80) |
 | TransformQuality < 0.5 AND StructureScore ≥ 0.8 | Plugin hook (system.transform) 引入了错误指令 | 中高 (0.75) |
 | PromptRedundancy > 0.3 | Prompt 冗余度过高 — 可能被多次注入相同 skill 内容 | 中 (0.65) |
+| TaskAlignment < 0.5 AND StructureScore ≥ 0.8 | 指令与任务不匹配 — 例如用 explore agent system prompt 做开发任务 | 中高 (0.75) |
 
-##### 规则组 C: Agent 行为/工具使用失败
+##### 规则组 C: Agent 行为/工具使用失败 (任务编排/规划问题)
+
+> **核心**: 这里的失败反映了 **runLoop 驱动下的 LLM 编排行为** — Agent 选择了哪些工具、以什么顺序、做了多少探索。这是 opencode 中"任务编排"的实际体现。
+
+| 观测条件 (Shadow Eval 指标) | 归因结论 | 置信度 |
 
 | 观测条件 (Shadow Eval 指标) | 归因结论 | 置信度 |
 |---------------------------|---------|-------|
@@ -1054,6 +1085,92 @@ diagnosis:
 ## 4. Phase 3: 数据驱动的自进化 — 靶向优化引擎
 
 根据 Phase 2 归因分析的结果, 靶向执行针对不同组件类型的自动优化。
+
+### 4.0 各组件的优化目标定义 — 以微内核特性开发为中心
+
+> **总体目标**: 提高闭源微内核操作系统的特性开发效果。具体体现为使 AI Benchmark 的 **T1~T5 五项能力得分持续提升**。
+>
+> 因此各组件的优化目标不是孤立的通用指标, 而是**围绕五项能力展开的、面向微内核 OS 开发场景的靶向目标**。
+
+#### 4.0.1 五项能力对微内核开发场景的优化要义
+
+| 能力 | 微内核场景下的"好" | 场景痛点 | 主要依赖的组件 |
+|------|-------------------|---------|---------------|
+| **T1 基线代码理解** | 准确区分内核态/用户态模块、理解 IPC 接口契约、识别 capability 机制、正确解析中文注释 | 代码库规模大、微内核架构不同于 Linux、中文注释可能引起语义偏差 | Tool(read/grep), LLM Call, System Prompt |
+| **T2 需求理解** | 准确理解中文技术需求中的微内核术语、"配额查询"="query"非"modify"、识别隐藏的约束 | 中文需求可能有歧义、需求文档中英混排 | CLI/入口, System Prompt |
+| **T3 影响分析** | 准确预测 IPC 消息变更影响的范围、识别需要修改的用户态服务、不误判为内核修改 | IPC 链路的"涟漪效应"复杂、多服务模块间依赖关系隐蔽 | Agent 编排(runLoop), Tool, Sub-agent |
+| **T4 方案设计** | 设计遵循微内核最小化原则、职责层次正确(内核/服务/库)、接口设计不违反 IPC 规范 | 架构约束严格(不能把用户态逻辑放内核)、设计空间受限于闭源接口 | LLM Call, System Prompt, Agent 编排 |
+| **T5 编码实现** | 代码风格与基线一致、正确使用闭源 API 和宏、编译通过率 100%、正确处理中文注释 | 闭源 API 不可搜索外部文档、需从基线代码推测用法、交叉编译环境复杂 | Tool(write/edit), LLM Call, MCP/Plugin |
+
+#### 4.0.2 以五项能力为中心的各组件优化目标
+
+> 每个组件的优化目标表达为: **"优化该组件 → 提升哪些 T 能力 → 在微内核开发中的具体表现"**
+
+| 组件 | 服务于哪些 T 能力 | 优化目标 (微内核场景) | 衡量指标 | Trade-off |
+|------|------------------|---------------------|---------|-----------|
+| **CLI/入口** | T2 | **中文需求术语映射准确**: 将中文需求中的"服务域配额查询"精确映射到英/中文混合的技术实现语境, 而非丢失或错误术语 | `ZhSemanticAccuracy` ≥ 0.9 — 中文技术术语被正确解析的比例 | 术语精确 vs Prompt 简洁 |
+| **Session/消息历史** | T1, T3, T4 | **架构决策链路保留**: 跨多轮对话保留 IPC 协议设计决策、模块职责划分依据等架构层面的上下文 | 跨轮次 `ContextCompleteness` — 多轮开发后关键架构约束是否仍在上下文中 | 保留关键架构决策 vs 窗口大小限制 |
+| **Compaction** | T1, T3 | **微内核术语保真**: 压缩摘要必须保留 IPC 消息类型、能力权能(capability)类型、服务边界等微内核特有的关键信息。**压缩后不应丢失"这个 API 是内核态还是用户态"这类关键区分** | `CompactFidelity` ≥ 0.85 — 对微内核关键信息的保留比例; 分类检查: 模块归属(内核/服务/库)是否在压缩后仍可区分 | 压缩率 vs 架构信息保真度 |
+| **Agent 定义/权限** | T3, T5 | **工具权限恰到好处**: (1) 能读取所有相关模块代码 (T3/T4) (2) 能编辑正确位置 (用户态服务不可误写内核, vice versa) | `OverConstraintRate` < 0.1 (不阻止必要的代码读/写) + `MisplacedEditRate` < 0.05 (不写入错误层) | 安全保护 vs 开发效率 |
+| **System Prompt 合成** | T1, T3, T4 | **注入微内核架构约束**: System Prompt 必须传达以下关键约束: (1) 内核/用户态职责分离原则 (2) IPC 接口契约 (3) capability 安全模型 (4) 代码注释的中文风格指南。这些约束若无注入, Agent 可能设计出违反架构的方案 | `MicrokernelConstraintScore` (0~1) — LLM-as-Judge: System Prompt 是否包含了正确的架构约束 | 约束充分 vs Prompt 长度 |
+| **任务编排 (runLoop)** | T1, T3, T4 | **合适的探索-设计-实现顺序**: Agent 在特性开发中应遵循: 读相关代码 → 理解现有接口 → 分析影响 → 设计方案 → 实现。**不应跳过读代码直接设计, 也不应过度探索而不产出** | `DevWorkflowCoverage` (0~1) — Agent 在开发过程中是否覆盖了 "理解→分析→设计→实现" 的完整工作流; `SkipDesignRate` (0~1) — 直接编码而未先设计 | 探索充分 vs 尽早产出 |
+| **Tool 执行** | T1, T5 | (1) **read/grep 准确命中关键模块**: 能正确读取内核 IPC 头文件、用户态服务代码等 (2) **write/edit 符合代码风格**: 写入的代码符合该微内核的编码规范 | `CodebaseHitRate` — 读取的文件是否属于 ground truth 修改范围; `CodeStyleCompliance` — 代码风格与基线一致性 | 代码读取广度 vs 专注度 |
+| **LLM Call** | T1, T2, T3, T4, T5 | **对微内核概念的理解深度和生成质量**: (1) 理解 capability、IPC、service domain 等微内核特有概念 (2) 生成的代码遵循闭源 API 的使用方式 (3) 中文注释风格与基线一致 (4) 推理链包含架构层面的考量 | `MicrokernelConceptAccuracy` (0~1) — LLM-as-Judge: 对微内核概念的理解准确度; `APIMatchRate` — 使用的 API 是否真实存在; `ChineseCommentStyleScore` — 注释风格与基线一致度 | 模型推理深度 vs 推理成本 |
+| **Sub-agent** | T3, T4 | **按模块边界恰当地分解**: 微内核特性开发天然可按层分解——内核改动、用户态服务改动、客户端库改动。sub-agent 应按此边界分解任务, 各层并行分析后再汇总 | `LayerBasedDecompScore` (0~1) — sub-agent 分解是否按微内核的"内核/服务/库"分层; `CrossLayerConsistency` — 各层结果组合后是否自洽 | 分解粒度 vs 汇总一致性 |
+| **MCP/Plugin** | T1, T5 | **构建与调试工具链可靠**: 提供微内核的交叉编译环境、测试运行器等基础设施工具的稳定访问 | `BuildToolStability` — 构建工具调用成功率; `TestExecSuccessRate` — 测试执行成功率 | 工具丰富性 vs 稳定性 |
+
+#### 4.0.3 三个跨组件的元目标
+
+```
+元目标 1: T1~T5 综合得分持续提升 ↗
+  每轮自进化后, 综合 score 应环比提升 ≥ 3%
+  任何单 T 能力不得出现 > 5% 的回退 (负优化控制)
+
+元目标 2: 微内核特有错误的递减 ↘
+  关键错误率 (如"将用户态服务功能误放内核"、"违反 IPC 协议约定"等) 应逐轮递减
+  每一轮进化应减少 ≥ 1 类高频错误
+
+元目标 3: 中文开发环境的适配度提升 ↗
+  中文注释风格与基线一致度, 中文技术需求的语义理解准确度, 应持续提升
+```
+
+#### 4.0.4 组件间的补偿效应与归因陷阱
+
+微内核开发的特殊性导致组件间存在特殊的补偿效应:
+
+```yaml
+典型补偿效应:
+
+  System Prompt 缺失架构约束 → LLM 设计违反微内核原则:
+    → 如果 prompt 没有明确"不要把用户态逻辑放内核", 强模型可能自己"猜到"但弱模型必然犯错
+    → 优化 prompt 后, 弱模型得分会显著提升 → 但这不是 LLM 变强了, 是 constraints 给了更明确的引导
+    → 归因时必须区分: "prompt 缺约束" vs "模型能力不够"
+
+  Tool 输出截断 → Agent 探索效率低:
+    → 微内核 IPC 头文件往往很长 (>500行), 如果 read 工具截断输出, Agent 可能只看到前半部分, 误判接口
+    → 优化 truncation 策略后, Agent 的模块理解准确率可能显著提升
+    → 这很容易被误归因为"Agent 工具使用能力差"
+
+  Compaction 丢失模块归属信息 → T3 影响分析错误:
+    → 压缩摘要遗漏了"某个 API 属于用户态服务 X", Agent 后续分析时可能将影响范围误判到内核
+    → 这容易被误归因为"Agent 的微内核架构理解能力不足"
+```
+
+**应对策略**: 每次优化后, 除检查目标指标外, 还需在 benchmark 的"架构错误"子维度上进行专项验证。如果架构错误减少, 证明优化方向正确; 如果仅其他指标提升而架构错误未改善, 需要怀疑是补偿效应。
+
+#### 4.0.5 各组件优化目标与 T 能力映射索引
+
+```
+T1 (基线理解) ← 主要受: Tool(read/grep命中率) + Compaction(架构信息保真) + LLM Call(概念理解)
+T2 (需求理解) ← 主要受: CLI/入口(中文术语精度) + System Prompt(微内核术语定义)
+T3 (影响分析) ← 主要受: Agent编排(探索覆盖率) + Sub-agent(按层分解) + Tool(跨模块读取)
+T4 (方案设计) ← 主要受: LLM Call(架构推理) + System Prompt(约束注入) + Agent编排(设计-实现顺序)
+T5 (编码实现) ← 主要受: Tool(write/edit代码风格) + LLM Call(API正确性) + MCP/Plugin(构建工具)
+```
+
+> **关键洞察**: 同一组件可能服务于多个 T 能力, 但权重不同。例如 System Prompt 主要影响 T1/T4, 对 T5 影响较小。在归因和优化时, 应参考此权重分配优先级。**优先优化影响多个 T 能力且当前 Shadow Eval 得分低的组件。**
+
+---
 
 ### 4.1 Prompt / 文本类组件优化
 
