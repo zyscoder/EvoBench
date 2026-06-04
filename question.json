@@ -1,7 +1,7 @@
 {
   "meta": {
-    "description": "AI Benchmark 预置问题库 —— 需求无关的通用评估提问。所有问题均不预设 AI 对该闭源系统有任何先验知识，要求 AI 通过阅读 baseline 代码自行发现答案。",
-    "version": "2.0",
+    "description": "AI Benchmark 预置问题库 —— 需求无关的通用评估提问。T1 聚焦基线代码库知识理解，采用 schema-first 结构化题库：按模块架构、构建入口、接口契约、数据结构、控制流、数据流、职责边界、权限异常、并发资源九个可量化子项组织，每个子项通过 coverage_map 充分覆盖有价值的问题切面。",
+    "version": "5.0",
     "language": "zh-CN",
     "design_principle": "每个问题均为需求无关的通用问题，可适用于任意新特性需求。AI 对该闭源微内核操作系统无任何预训练知识，必须通过探索 baseline 代码获取信息。评测时将 [需求描述] + [预置问题] 组合为完整请求。",
     "key_constraint": "问题设计中不预设 AI 知道任何模块名、函数名、数据结构名或架构细节——这些都需要 AI 从代码中自行发现和确认。"
@@ -9,54 +9,917 @@
   "capabilities": {
     "T1_基线代码库知识理解": {
       "name": "T1 - Baseline 代码库知识理解能力",
-      "description": "衡量 AI 仅凭阅读代码，能否准确掌握现有系统的架构、接口和运行机制。AI 对该闭源系统无先验知识，必须通过代码探索来构建理解。",
+      "description": "衡量 AI 仅凭阅读 baseline 代码与随附文档，能否准确掌握现有系统的架构、接口、运行机制和约束边界。T1 采用 schema-first 的结构化问答设计：题面必须详细清楚，回答和 oracle 必须结构化，便于实体、分类、关系、顺序和证据级评分。",
+      "schema_templates": {
+        "T1.entity_evidence_list.v1": {
+          "description": "用于模块、文件、接口、数据结构、配置项、错误码、锁等实体识别任务。",
+          "required_top_level_fields": ["applicability", "entities", "rejected_candidates", "summary"],
+          "entity_fields": ["name", "kind", "layer", "role", "path", "symbol", "evidence", "confidence"],
+          "allowed_confidence": ["high", "medium", "low"]
+        },
+        "T1.relation_graph.v1": {
+          "description": "用于依赖关系、调用关系、所有权关系、跨层通信关系等关系型任务。",
+          "required_top_level_fields": ["applicability", "entities", "relations", "summary"],
+          "relation_fields": ["from", "to", "relation_type", "direction", "condition", "evidence", "confidence"]
+        },
+        "T1.ordered_trace.v1": {
+          "description": "用于控制流、调用链、错误传播链等有序路径任务。",
+          "required_top_level_fields": ["applicability", "entrypoints", "steps", "branches", "unresolved_dynamic_dispatch", "summary"],
+          "step_fields": ["order", "from", "to", "function", "path", "layer", "condition", "effect", "evidence", "confidence"]
+        },
+        "T1.lifecycle_trace.v1": {
+          "description": "用于对象生命周期、数据流、资源所有权变化和异常清理任务。",
+          "required_top_level_fields": ["applicability", "objects", "lifecycle_steps", "ownership_transfers", "cleanup_paths", "summary"],
+          "lifecycle_step_types": ["create", "init", "validate", "transfer", "read", "update", "persist", "cache", "release", "cleanup", "not_applicable"]
+        },
+        "T1.matrix.v1": {
+          "description": "用于职责矩阵、兼容性矩阵、错误语义矩阵、资源管理矩阵等分类任务。",
+          "required_top_level_fields": ["applicability", "matrix", "exceptions", "summary"],
+          "matrix_row_fields": ["subject", "category", "responsibility", "not_responsibility", "evidence", "confidence"]
+        }
+      },
+      "oracle_schema_templates": {
+        "T1.entity_oracle.v1": {
+          "fields": ["must_include", "should_include", "acceptable_aliases", "negative_items", "required_evidence_patterns", "not_applicable_conditions"]
+        },
+        "T1.relation_oracle.v1": {
+          "fields": ["canonical_entities", "required_relations", "optional_relations", "forbidden_relations", "acceptable_aliases", "not_applicable_conditions"]
+        },
+        "T1.ordered_trace_oracle.v1": {
+          "fields": ["required_steps", "optional_steps", "required_branches", "allowed_dynamic_dispatch_notes", "forbidden_steps", "not_applicable_conditions"]
+        },
+        "T1.lifecycle_oracle.v1": {
+          "fields": ["required_objects", "required_lifecycle_steps", "required_ownership_transfers", "required_cleanup_paths", "forbidden_claims", "not_applicable_conditions"]
+        },
+        "T1.matrix_oracle.v1": {
+          "fields": ["required_rows", "allowed_exceptions", "negative_rows", "classification_labels", "not_applicable_conditions"]
+        }
+      },
+      "scoring_profiles": {
+        "T1.entity_classification_with_evidence.v1": {
+          "entity_recall": 0.3,
+          "entity_precision": 0.2,
+          "classification_accuracy": 0.2,
+          "evidence_quality": 0.2,
+          "overprediction_penalty": 0.1
+        },
+        "T1.relation_reasoning_with_evidence.v1": {
+          "entity_recall": 0.2,
+          "relation_accuracy": 0.35,
+          "classification_accuracy": 0.15,
+          "evidence_quality": 0.2,
+          "overprediction_penalty": 0.1
+        },
+        "T1.ordered_trace_with_branches.v1": {
+          "step_recall": 0.25,
+          "step_order_accuracy": 0.25,
+          "branch_coverage": 0.2,
+          "evidence_quality": 0.2,
+          "unsupported_claim_penalty": 0.1
+        },
+        "T1.lifecycle_completeness.v1": {
+          "object_recall": 0.2,
+          "lifecycle_step_recall": 0.25,
+          "ownership_accuracy": 0.2,
+          "cleanup_accuracy": 0.15,
+          "evidence_quality": 0.15,
+          "unsupported_claim_penalty": 0.05
+        },
+        "T1.matrix_boundary_judgment.v1": {
+          "row_recall": 0.25,
+          "classification_accuracy": 0.3,
+          "negative_boundary_accuracy": 0.2,
+          "evidence_quality": 0.15,
+          "overprediction_penalty": 0.1
+        }
+      },
       "sub_items": {
-        "模块定位": {
-          "description": "判断某功能属于微内核核心、用户态服务、驱动服务、客户端库还是工具层",
+        "模块与架构定位": {
+          "score_weight": 13,
+          "description": "判断相关能力位于哪些目录、编译目标、服务或库组件中，并区分核心模块与辅助模块；不能将所有能力默认归入内核。",
+          "coverage_map": [
+            {"coverage_id": "module.keyword_extraction", "name": "需求关键词抽取", "goal": "从需求描述中抽取可用于代码检索的中英文关键词、对象名、动作和同义表达。"},
+            {"coverage_id": "module.candidate_discovery", "name": "候选模块发现", "goal": "从目录、文件名、符号、构建目标和文档中发现候选模块。"},
+            {"coverage_id": "module.layer_classification", "name": "架构层次分类", "goal": "区分内核核心、用户态服务、驱动服务、客户端库、工具层和项目实际分层。"},
+            {"coverage_id": "module.primary_secondary_split", "name": "核心与辅助模块区分", "goal": "区分主实现位置、封装层、适配层、测试/文档/构建辅助位置。"},
+            {"coverage_id": "module.dependency_relation", "name": "模块依赖关系", "goal": "识别相关模块之间的 include、构建、调用或 IPC 依赖。"},
+            {"coverage_id": "module.negative_filtering", "name": "误命中排除", "goal": "识别名称相似但语义无关的目录、文件或符号。"},
+            {"coverage_id": "module.ownership_boundary", "name": "代码所有权边界", "goal": "判断相关能力在基线代码中的所有权归属和边界。"}
+          ],
           "questions": [
-            "请通过阅读 baseline 代码中的目录结构、顶层 README、Makefile 或构建配置文件，识别该系统的代码组织方式。然后判断：该需求描述的功能最可能归属于哪个架构层次（内核核心/用户态服务/驱动服务/客户端库/工具层）？请引用你在代码中发现的具体线索来支撑你的判断。",
-            "请在 baseline 代码中搜索与该需求关键词相关的目录、文件名和模块名。根据搜索结果，分析这些现有代码属于系统的哪个层次，并说明你是如何从代码中区分各架构层次的。",
-            "假设你要在 baseline 中定位该需求涉及的功能，请描述你的搜索策略：你会按什么顺序搜索哪些目录？你会使用什么关键词？你会如何从命名约定中判断代码的架构归属？请实际执行搜索并报告发现。"
+            {
+              "question_id": "T1_MODULE_ARCH_001",
+              "coverage_tags": ["module.keyword_extraction", "module.candidate_discovery", "module.layer_classification"],
+              "coverage_level": "core",
+              "difficulty": "basic",
+              "question_role": "entity_extraction",
+              "response_schema_ref": "T1.entity_evidence_list.v1",
+              "oracle_schema_ref": "T1.entity_oracle.v1",
+              "scoring_profile_ref": "T1.entity_classification_with_evidence.v1",
+              "prompt": {
+                "title": "定位需求相关的基线模块与架构层次",
+                "description": "请基于需求描述和 baseline 代码，定位当前系统中与该需求语义最相关的目录、模块、文件和关键符号。该任务只评估你对基线代码库现状的理解，不要求设计或实现新功能。请特别避免把所有能力默认归入内核，必须用代码证据区分内核核心、用户态服务、驱动服务、客户端库、工具层或项目中实际存在的其他层次。",
+                "instructions": ["先抽取用于检索的关键词、动词、对象名和同义表达。", "在 baseline 中定位候选目录、文件、模块和符号。", "将候选项按架构层次和相关角色分类。", "对每个保留项给出 path 或 symbol 级证据。"],
+                "output_requirements": ["必须输出 JSON。", "entities 中必须包含 layer、role、path、symbol、evidence 和 confidence。", "不能确认的候选项保留为 low confidence，不要猜测。"]
+              }
+            },
+            {
+              "question_id": "T1_MODULE_ARCH_002",
+              "coverage_tags": ["module.primary_secondary_split", "module.ownership_boundary"],
+              "coverage_level": "core",
+              "difficulty": "medium",
+              "question_role": "boundary_judgment",
+              "response_schema_ref": "T1.entity_evidence_list.v1",
+              "oracle_schema_ref": "T1.entity_oracle.v1",
+              "scoring_profile_ref": "T1.entity_classification_with_evidence.v1",
+              "prompt": {
+                "title": "区分主实现模块、辅助模块和边界外模块",
+                "description": "请围绕需求描述相关能力，在 baseline 中区分哪些代码位置是主实现位置，哪些只是客户端封装、配置适配、工具入口、测试/示例或文档辅助位置，哪些候选项虽然名称相似但不属于该能力边界。该题重点考察 Agent 是否能控制探索范围，而不是简单罗列搜索结果。",
+                "instructions": ["从候选模块中标注 primary、secondary、supporting、rejected_candidate 四类角色。", "说明每一类的判定依据，例如调用方向、构建目标、导出接口或服务注册关系。", "对 rejected_candidate 必须说明排除理由。", "如果只有单一主模块，也要说明为何其他层次不承担主职责。"],
+                "output_requirements": ["必须输出 JSON。", "rejected_candidates 不能为空；若确无误命中，填空数组并解释检索范围。", "summary 中用简短中文总结代码所有权边界。"]
+              }
+            },
+            {
+              "question_id": "T1_MODULE_ARCH_003",
+              "coverage_tags": ["module.dependency_relation", "module.layer_classification"],
+              "coverage_level": "extended",
+              "difficulty": "medium",
+              "question_role": "relation_reasoning",
+              "response_schema_ref": "T1.relation_graph.v1",
+              "oracle_schema_ref": "T1.relation_oracle.v1",
+              "scoring_profile_ref": "T1.relation_reasoning_with_evidence.v1",
+              "prompt": {
+                "title": "分析需求相关模块之间的依赖关系",
+                "description": "请在 baseline 中分析需求相关模块之间的依赖关系，包括 include 依赖、构建依赖、函数调用、IPC 通信、服务注册或配置加载关系。该题不要求预测新特性会修改哪些文件，而是要求还原基线中相关模块现在如何相互依赖。",
+                "instructions": ["先列出参与关系分析的实体。", "对每条依赖关系标注 relation_type、方向和触发条件。", "区分静态依赖和运行时通信关系。", "遇到动态注册或函数指针时，指出静态分析无法完全确认的位置。"],
+                "output_requirements": ["必须输出 JSON。", "relations 中每条关系必须有 from、to、relation_type、direction、evidence。", "不要把同目录相邻文件自动视为依赖，必须有代码证据。"]
+              }
+            },
+            {
+              "question_id": "T1_MODULE_ARCH_004",
+              "coverage_tags": ["module.keyword_extraction", "module.negative_filtering"],
+              "coverage_level": "extended",
+              "difficulty": "medium",
+              "question_role": "negative_filtering",
+              "response_schema_ref": "T1.entity_evidence_list.v1",
+              "oracle_schema_ref": "T1.entity_oracle.v1",
+              "scoring_profile_ref": "T1.entity_classification_with_evidence.v1",
+              "prompt": {
+                "title": "基于关键词检索结果排除误命中",
+                "description": "请从需求描述中抽取检索关键词并执行代码搜索，然后重点分析搜索结果中的误命中。该题考察 Agent 是否能避免被同名变量、无关目录、测试 fixture、历史兼容代码或文档示例误导。",
+                "instructions": ["列出关键词及其来源。", "列出命中的候选实体并分类为 relevant 或 rejected_candidate。", "对每个 rejected_candidate 说明排除依据，例如调用路径不连通、层次不匹配、仅测试使用或语义不同。", "保留真正相关实体并说明证据。"],
+                "output_requirements": ["必须输出 JSON。", "keyword_extraction 可放入 summary 或 entities 的 evidence 中。", "不能只输出最终结论，必须保留排除过程。"]
+              }
+            },
+            {
+              "question_id": "T1_MODULE_ARCH_005",
+              "coverage_tags": ["module.layer_classification", "module.ownership_boundary"],
+              "coverage_level": "stress",
+              "difficulty": "advanced",
+              "question_role": "boundary_judgment",
+              "response_schema_ref": "T1.matrix.v1",
+              "oracle_schema_ref": "T1.matrix_oracle.v1",
+              "scoring_profile_ref": "T1.matrix_boundary_judgment.v1",
+              "prompt": {
+                "title": "建立需求相关能力的架构层次归属矩阵",
+                "description": "请将需求描述涉及的基线能力按架构层次建立归属矩阵。矩阵应明确每个层次是否参与、承担什么职责、不承担什么职责，以及这种判断来自哪些代码证据。该题用于识别 Agent 是否具备微内核分层意识。",
+                "instructions": ["矩阵行必须覆盖项目实际存在的相关层次。", "对每个层次填写 responsibility 和 not_responsibility。", "对未参与层次也要给出排除依据。", "如项目没有某个通用层次，请使用 not_applicable 并说明证据。"],
+                "output_requirements": ["必须输出 JSON。", "matrix 每行必须包含 subject、category、responsibility、not_responsibility、evidence、confidence。", "不得把理论上的微内核职责当作代码事实。"]
+              }
+            }
           ]
         },
-        "接口理解": {
-          "description": "理解系统调用、IPC 接口、服务 API、内部函数签名和契约",
+        "构建配置与运行入口理解": {
+          "score_weight": 8,
+          "description": "理解相关模块如何被构建、按何种配置启用、从哪些 CLI/API/启动流程/服务入口进入。",
+          "coverage_map": [
+            {"coverage_id": "entry.build_target", "name": "构建目标识别", "goal": "识别相关源文件归属的编译目标、构建脚本和产物形态。"},
+            {"coverage_id": "entry.config_gate", "name": "配置开关识别", "goal": "识别编译时或运行时配置项、默认值和生效路径。"},
+            {"coverage_id": "entry.runtime_entrypoint", "name": "运行入口识别", "goal": "识别 API、CLI、服务启动、系统初始化、IPC handler 等入口。"},
+            {"coverage_id": "entry.initialization_flow", "name": "初始化流程理解", "goal": "追踪服务注册、对象初始化和入口绑定过程。"},
+            {"coverage_id": "entry.applicability", "name": "不适用判断", "goal": "在无独立构建或配置入口时能给出证据化的不适用判断。"}
+          ],
           "questions": [
-            "请通过阅读 baseline 代码中与该需求相关的头文件（.h）、接口定义文件和 IPC 协议定义文件，梳理现有的接口体系。你需要主动发现：系统有哪些接口定义方式？IPC 消息如何声明和编号？函数接口的签名约定是什么？请基于代码中的实际发现来回答，不要推测。",
-            "请在 baseline 代码中查找与该需求功能点相关的已有函数声明和定义，阅读其签名、参数类型和返回值约定。列出你实际找到的接口，并说明你是如何从代码中确认调用契约（如前提条件、返回值含义、错误码）的。",
-            "搜索 baseline 中所有与该需求相关的 IPC 消息定义或通信接口。如果你找到了相关定义，请分析其通信模式（同步/异步）、消息格式和参与通信的双方。请引用具体的代码片段作为证据。如果你未找到，请说明搜索过程和可能的结论。"
+            {
+              "question_id": "T1_ENTRY_BUILD_001",
+              "coverage_tags": ["entry.build_target", "entry.config_gate"],
+              "coverage_level": "core",
+              "difficulty": "basic",
+              "question_role": "entity_extraction",
+              "response_schema_ref": "T1.entity_evidence_list.v1",
+              "oracle_schema_ref": "T1.entity_oracle.v1",
+              "scoring_profile_ref": "T1.entity_classification_with_evidence.v1",
+              "prompt": {
+                "title": "识别相关模块的构建目标与配置开关",
+                "description": "请在 baseline 中找出需求相关代码如何进入构建系统。重点识别构建脚本、编译目标、条件编译宏、配置开关、安装或打包规则。该题考察 Agent 是否能把代码位置与真实产物形态联系起来，而不仅是找到源文件。",
+                "instructions": ["定位相关源文件对应的构建配置。", "识别是否存在编译时配置、feature flag 或条件宏。", "说明这些配置如何影响代码是否编译或启用。", "若没有独立配置入口，请给出检索证据并标注 not_applicable。"],
+                "output_requirements": ["必须输出 JSON。", "entities 的 kind 可使用 build_target、config_option、source_file、macro。", "每个配置项必须说明默认值来源或无法确认原因。"]
+              }
+            },
+            {
+              "question_id": "T1_ENTRY_BUILD_002",
+              "coverage_tags": ["entry.runtime_entrypoint"],
+              "coverage_level": "core",
+              "difficulty": "medium",
+              "question_role": "entity_extraction",
+              "response_schema_ref": "T1.entity_evidence_list.v1",
+              "oracle_schema_ref": "T1.entity_oracle.v1",
+              "scoring_profile_ref": "T1.entity_classification_with_evidence.v1",
+              "prompt": {
+                "title": "识别需求相关能力的运行入口",
+                "description": "请分析需求描述相关能力在 baseline 中可能从哪些运行入口触发。入口可以是公开 API、CLI 命令、系统启动流程、服务注册回调、IPC handler、后台任务或驱动事件。该题只要求理解基线入口，不要求设计新入口。",
+                "instructions": ["先列出候选入口并说明触发来源。", "区分用户可见入口和内部入口。", "说明入口如何把请求或事件转交给核心实现。", "对不确定入口标注 low confidence 并说明原因。"],
+                "output_requirements": ["必须输出 JSON。", "entities 中 role 使用 public_entry、internal_entry、dispatcher 或 handler。", "summary 中说明最可信入口链。"]
+              }
+            },
+            {
+              "question_id": "T1_ENTRY_BUILD_003",
+              "coverage_tags": ["entry.initialization_flow", "entry.runtime_entrypoint"],
+              "coverage_level": "extended",
+              "difficulty": "medium",
+              "question_role": "path_tracing",
+              "response_schema_ref": "T1.ordered_trace.v1",
+              "oracle_schema_ref": "T1.ordered_trace_oracle.v1",
+              "scoring_profile_ref": "T1.ordered_trace_with_branches.v1",
+              "prompt": {
+                "title": "追踪相关服务或组件的初始化与入口绑定过程",
+                "description": "如果需求相关能力依赖服务、驱动、管理组件或库初始化，请追踪 baseline 中该组件从初始化到可接收调用的过程。重点关注服务注册、handler 绑定、全局表初始化、配置读取和事件循环启动。",
+                "instructions": ["确定初始化入口或注册函数。", "按顺序列出初始化步骤。", "标注每一步绑定了哪些 handler、接口或状态。", "如果该能力无需初始化流程，请用 not_applicable 并给出证据。"],
+                "output_requirements": ["必须输出 JSON。", "steps 必须有 order、function、path、effect、evidence。", "不允许把运行期请求路径混同为初始化路径。"]
+              }
+            },
+            {
+              "question_id": "T1_ENTRY_BUILD_004",
+              "coverage_tags": ["entry.config_gate", "entry.applicability"],
+              "coverage_level": "extended",
+              "difficulty": "medium",
+              "question_role": "applicability_assessment",
+              "response_schema_ref": "T1.matrix.v1",
+              "oracle_schema_ref": "T1.matrix_oracle.v1",
+              "scoring_profile_ref": "T1.matrix_boundary_judgment.v1",
+              "prompt": {
+                "title": "判断需求相关能力是否受配置或开关控制",
+                "description": "请判断需求相关的基线能力是否受编译时或运行时配置控制。该题允许回答不适用，但必须用代码证据证明你查过配置路径，而不是因为没有检索到就直接否定。",
+                "instructions": ["检查构建配置、运行时配置、环境变量、启动参数和默认配置。", "列出找到的配置项及其作用范围。", "说明配置读取后如何影响入口、模块加载或行为分支。", "若无配置控制，给出搜索路径和排除依据。"],
+                "output_requirements": ["必须输出 JSON。", "matrix 行的 category 使用 compile_time、runtime、startup、environment、not_applicable。", "exceptions 中记录无法确认的配置来源。"]
+              }
+            },
+            {
+              "question_id": "T1_ENTRY_BUILD_005",
+              "coverage_tags": ["entry.build_target", "entry.runtime_entrypoint"],
+              "coverage_level": "stress",
+              "difficulty": "advanced",
+              "question_role": "relation_reasoning",
+              "response_schema_ref": "T1.relation_graph.v1",
+              "oracle_schema_ref": "T1.relation_oracle.v1",
+              "scoring_profile_ref": "T1.relation_reasoning_with_evidence.v1",
+              "prompt": {
+                "title": "关联构建产物、运行入口和代码模块",
+                "description": "请把需求相关能力的源文件、构建产物、运行入口和核心模块关联起来，形成一张从构建到运行的关系图。该题用于考察 Agent 是否理解代码不是孤立文件，而是通过构建和启动机制进入系统。",
+                "instructions": ["列出 source_file、build_target、artifact、runtime_entry、core_module 等实体。", "用 relations 说明它们之间的 compiled_into、registered_as、dispatches_to 或 wraps 关系。", "标注无法从静态代码确认的动态加载或部署关系。", "不要把未被构建引用的文件误认为运行时参与者。"],
+                "output_requirements": ["必须输出 JSON。", "relations 必须有方向和 evidence。", "summary 中说明一条最主要的构建到运行路径。"]
+              }
+            }
           ]
         },
-        "数据结构理解": {
-          "description": "识别关键对象、句柄、权限令牌、资源描述符、引用计数字段",
+        "接口契约理解": {
+          "score_weight": 13,
+          "description": "理解系统调用、IPC 接口、服务 API、内部函数签名、参数语义、返回值和错误码约定，区分同步/异步通信模式。",
+          "coverage_map": [
+            {"coverage_id": "interface.discovery", "name": "接口发现", "goal": "发现相关公开接口、内部接口、系统调用、IPC 消息或服务 API。"},
+            {"coverage_id": "interface.signature", "name": "签名与参数语义", "goal": "理解参数、返回值、输出参数、可空性、所有权和单位含义。"},
+            {"coverage_id": "interface.contract", "name": "调用契约", "goal": "识别调用前置条件、调用上下文、同步/异步和资源释放责任。"},
+            {"coverage_id": "interface.ipc_protocol", "name": "IPC 协议语义", "goal": "识别消息类型、请求/响应结构、路由和通信方向。"},
+            {"coverage_id": "interface.versioning", "name": "版本与兼容", "goal": "识别版本字段、兼容路径、弃用标记和扩展模式。"},
+            {"coverage_id": "interface.error_contract", "name": "错误语义", "goal": "理解接口层错误码、状态码和失败传播。"}
+          ],
           "questions": [
-            "请在 baseline 代码中搜索与该需求相关的结构体定义（struct）、类型定义（typedef）和枚举类型（enum）。列出你实际找到的关键数据结构，阅读其字段定义和注释，说明每个结构的用途和字段含义。你需要从代码和注释中推断，而非猜测。",
-            "从 baseline 代码中识别与该需求相关的对象生命周期管理机制：查找引用计数（refcount/ref_count 等）字段、资源分配和释放函数。说明你发现的资源管理模式的证据。",
-            "请检查 baseline 中与该需求相关的数据结构是否涉及跨地址空间传递（IPC 通信）。查找是否有序列化/反序列化函数或注释标记。说明你的发现和推断依据。"
+            {
+              "question_id": "T1_INTERFACE_001",
+              "coverage_tags": ["interface.discovery", "interface.signature"],
+              "coverage_level": "core",
+              "difficulty": "basic",
+              "question_role": "entity_extraction",
+              "response_schema_ref": "T1.entity_evidence_list.v1",
+              "oracle_schema_ref": "T1.entity_oracle.v1",
+              "scoring_profile_ref": "T1.entity_classification_with_evidence.v1",
+              "prompt": {
+                "title": "梳理需求相关的公开接口和内部接口",
+                "description": "请在 baseline 中发现与需求描述相关的接口，包括系统调用、IPC 消息、服务 API、客户端库 API、内部函数或回调接口。请区分稳定边界接口和模块内部辅助函数，不要把所有被调用函数都当作接口。",
+                "instructions": ["列出接口定义位置和主要调用位置。", "为每个接口标注 interface_type、visibility、caller、callee。", "说明参数和返回值的基本语义。", "区分公开稳定接口和内部实现细节。"],
+                "output_requirements": ["必须输出 JSON。", "entities 的 kind 使用 syscall、ipc_message、service_api、client_api、internal_function 或 callback。", "每个接口必须提供定义证据。"]
+              }
+            },
+            {
+              "question_id": "T1_INTERFACE_002",
+              "coverage_tags": ["interface.contract", "interface.signature"],
+              "coverage_level": "core",
+              "difficulty": "medium",
+              "question_role": "contract_extraction",
+              "response_schema_ref": "T1.matrix.v1",
+              "oracle_schema_ref": "T1.matrix_oracle.v1",
+              "scoring_profile_ref": "T1.matrix_boundary_judgment.v1",
+              "prompt": {
+                "title": "提取接口调用契约和前置条件",
+                "description": "请选择与需求描述最相关的接口，提取其调用契约。契约包括调用前必须满足的初始化、权限、上下文、锁状态、参数范围、所有权和释放责任。该题重点考察 Agent 是否能从声明、实现和调用点综合推断接口真实语义。",
+                "instructions": ["对每个接口读取声明、实现和至少一个调用点。", "列出 precondition、postcondition、ownership、context、error_contract。", "说明契约来自代码、注释还是调用惯例。", "无法确认的契约不要猜测，标注 unknown。"],
+                "output_requirements": ["必须输出 JSON。", "matrix 的 subject 为接口名。", "evidence 必须包含声明或调用点路径。"]
+              }
+            },
+            {
+              "question_id": "T1_INTERFACE_003",
+              "coverage_tags": ["interface.ipc_protocol", "interface.discovery"],
+              "coverage_level": "core",
+              "difficulty": "medium",
+              "question_role": "protocol_understanding",
+              "response_schema_ref": "T1.relation_graph.v1",
+              "oracle_schema_ref": "T1.relation_oracle.v1",
+              "scoring_profile_ref": "T1.relation_reasoning_with_evidence.v1",
+              "prompt": {
+                "title": "理解相关 IPC 或服务通信接口",
+                "description": "如果需求相关能力涉及 IPC、消息队列、RPC、事件通知或服务 API，请还原 baseline 中现有通信接口的协议语义。若该能力不涉及跨进程或跨服务通信，也应给出证据说明不适用。",
+                "instructions": ["定位消息类型、请求体、响应体和 handler 注册位置。", "说明通信方向、同步/异步模式和路由方式。", "用 relations 表示 sender、receiver、message、handler 的关系。", "标注不适用时必须说明你检查了哪些通信定义位置。"],
+                "output_requirements": ["必须输出 JSON。", "relations 的 relation_type 使用 sends、receives、handles、responds_with 或 not_applicable。", "summary 中说明协议是否为请求-响应、单向通知或异步事件。"]
+              }
+            },
+            {
+              "question_id": "T1_INTERFACE_004",
+              "coverage_tags": ["interface.versioning", "interface.contract"],
+              "coverage_level": "extended",
+              "difficulty": "medium",
+              "question_role": "compatibility_contract",
+              "response_schema_ref": "T1.entity_evidence_list.v1",
+              "oracle_schema_ref": "T1.entity_oracle.v1",
+              "scoring_profile_ref": "T1.entity_classification_with_evidence.v1",
+              "prompt": {
+                "title": "识别接口版本、兼容和扩展约定",
+                "description": "请检查需求相关接口是否存在版本字段、保留字段、兼容分支、deprecated 标记、能力协商、长度字段或扩展结构。该题只评估 baseline 中已经存在的接口演进约定，不要求预测新需求如何扩展。",
+                "instructions": ["搜索相关接口定义和版本检查逻辑。", "列出兼容性相关字段、宏、注释或分支。", "说明旧调用者和新调用者在 baseline 中如何被区分。", "若没有版本机制，请说明检索证据和可能原因。"],
+                "output_requirements": ["必须输出 JSON。", "entities 的 role 使用 version_field、compat_branch、deprecated_marker、reserved_field 或 not_applicable。", "不得将普通参数误判为版本机制。"]
+              }
+            },
+            {
+              "question_id": "T1_INTERFACE_005",
+              "coverage_tags": ["interface.error_contract", "interface.signature"],
+              "coverage_level": "extended",
+              "difficulty": "medium",
+              "question_role": "error_semantics",
+              "response_schema_ref": "T1.matrix.v1",
+              "oracle_schema_ref": "T1.matrix_oracle.v1",
+              "scoring_profile_ref": "T1.matrix_boundary_judgment.v1",
+              "prompt": {
+                "title": "提取接口层错误码和状态语义",
+                "description": "请围绕需求相关接口，梳理接口层面可能返回或传播的错误码、状态码、异常状态或失败标记。重点说明每种错误代表调用者问题、权限问题、资源问题、目标不存在、服务不可用还是内部故障。",
+                "instructions": ["定位错误码定义和接口返回路径。", "将错误按 failure_type 分类。", "说明错误从 callee 到 caller 的传播方式。", "区分接口直接产生的错误和下游透传错误。"],
+                "output_requirements": ["必须输出 JSON。", "matrix 行的 category 使用 invalid_input、permission_denied、not_found、resource_exhausted、service_unavailable、internal_error 或 passthrough。", "每行必须有 evidence。"]
+              }
+            },
+            {
+              "question_id": "T1_INTERFACE_006",
+              "coverage_tags": ["interface.contract", "interface.ipc_protocol"],
+              "coverage_level": "stress",
+              "difficulty": "advanced",
+              "question_role": "boundary_judgment",
+              "response_schema_ref": "T1.matrix.v1",
+              "oracle_schema_ref": "T1.matrix_oracle.v1",
+              "scoring_profile_ref": "T1.matrix_boundary_judgment.v1",
+              "prompt": {
+                "title": "区分接口边界和实现细节",
+                "description": "请判断需求相关代码中哪些符号构成系统边界、服务边界或库边界，哪些只是模块内部实现细节。该题用于防止 Agent 把内部辅助函数误认为可对外依赖的接口。",
+                "instructions": ["列出候选接口和内部函数。", "根据头文件导出、服务注册、可见性、调用范围和文档说明进行分类。", "说明哪些符号不应被外部调用者直接依赖。", "对存在争议的符号给出置信度和证据。"],
+                "output_requirements": ["必须输出 JSON。", "matrix 的 category 使用 public_boundary、service_boundary、library_boundary、internal_detail。", "negative_rows 中应包含被排除的内部实现细节。"]
+              }
+            }
           ]
         },
-        "调用链追踪": {
-          "description": "能完整追踪一个典型请求从用户态入口经 IPC 到内核处理再返回的全链路",
+        "数据结构与状态模型理解": {
+          "score_weight": 13,
+          "description": "识别关键对象、句柄、资源描述符、状态枚举、引用计数字段、约束条件和跨地址空间传递要求。",
+          "coverage_map": [
+            {"coverage_id": "data.structure_discovery", "name": "关键结构发现", "goal": "发现结构体、枚举、类型别名、宏、常量和消息体定义。"},
+            {"coverage_id": "data.field_semantics", "name": "字段语义理解", "goal": "理解字段含义、单位、范围、可空性、所有权和读写者。"},
+            {"coverage_id": "data.state_machine", "name": "状态机理解", "goal": "识别状态字段、状态枚举、合法转换和非法状态检查。"},
+            {"coverage_id": "data.layout_constraints", "name": "布局约束", "goal": "识别二进制布局、对齐、大小、版本和跨地址空间传递要求。"},
+            {"coverage_id": "data.helper_functions", "name": "辅助函数语义", "goal": "通过初始化、复制、序列化、清理函数推断真实语义。"},
+            {"coverage_id": "data.producer_consumer", "name": "读写关系", "goal": "识别字段由谁写入、读取、缓存、派生或统计。"}
+          ],
           "questions": [
-            "请从 baseline 代码中，以与该需求最相关的某个入口函数（如 API 函数或系统调用处理函数）为起点，追踪该函数的调用链：它调用了哪些函数？这些函数又调用了谁？一直追踪到不再能通过代码静态分析继续为止。画出你实际追踪到的调用路径。",
-            "在 baseline 代码中搜索与该需求相关的 IPC 发送和接收函数。阅读这些函数的调用上下文，尝试还原一次跨进程通信的完整路径：发起方如何构造消息、消息如何发送、接收方如何处理、响应如何返回。基于你实际阅读的代码来描述，如果某段路径在代码中不可见，请明确说明。",
-            "请在 baseline 中追踪与该需求相关的错误处理路径：当操作失败时，错误码如何生成、如何传递、如何在调用链的每一层被处理或传播？从你实际阅读的错误处理代码中总结出系统的错误传播模式。"
+            {
+              "question_id": "T1_DATA_MODEL_001",
+              "coverage_tags": ["data.structure_discovery", "data.field_semantics"],
+              "coverage_level": "core",
+              "difficulty": "basic",
+              "question_role": "entity_extraction",
+              "response_schema_ref": "T1.entity_evidence_list.v1",
+              "oracle_schema_ref": "T1.entity_oracle.v1",
+              "scoring_profile_ref": "T1.entity_classification_with_evidence.v1",
+              "prompt": {
+                "title": "识别需求相关的关键数据结构",
+                "description": "请在 baseline 中查找与需求描述相关的结构体、类型别名、枚举、联合体、常量、宏和消息体定义。该题评估 Agent 是否能找到承载现有机制的关键数据模型，而不只是定位函数。",
+                "instructions": ["列出关键数据结构和定义位置。", "说明每个结构代表的系统概念。", "标注核心字段及其含义。", "区分运行时对象、配置数据、请求消息、响应消息、句柄或资源描述符。"],
+                "output_requirements": ["必须输出 JSON。", "entities 的 kind 使用 struct、enum、typedef、macro、message_body、handle 或 descriptor。", "字段含义可以放在 evidence 或 summary 中，但必须可追溯到代码。"]
+              }
+            },
+            {
+              "question_id": "T1_DATA_MODEL_002",
+              "coverage_tags": ["data.producer_consumer", "data.field_semantics"],
+              "coverage_level": "core",
+              "difficulty": "medium",
+              "question_role": "relation_reasoning",
+              "response_schema_ref": "T1.relation_graph.v1",
+              "oracle_schema_ref": "T1.relation_oracle.v1",
+              "scoring_profile_ref": "T1.relation_reasoning_with_evidence.v1",
+              "prompt": {
+                "title": "分析关键字段的读写者和数据来源",
+                "description": "请选择需求相关的关键数据结构，分析其重要字段由谁写入、谁读取、何时更新、是否为配置输入或运行时派生状态。该题用于评估 Agent 是否真正理解数据语义，而不是只复述字段名。",
+                "instructions": ["列出关键字段。", "用 relations 表示 writes、reads、derives、validates、caches 等关系。", "区分配置输入、运行时状态、缓存字段、统计字段和协议字段。", "对无法确认读写者的字段标注 low confidence。"],
+                "output_requirements": ["必须输出 JSON。", "relations 必须指向函数、模块或接口。", "不要把字段名中的语义当作唯一证据，必须结合使用点。"]
+              }
+            },
+            {
+              "question_id": "T1_DATA_MODEL_003",
+              "coverage_tags": ["data.state_machine"],
+              "coverage_level": "core",
+              "difficulty": "medium",
+              "question_role": "state_modeling",
+              "response_schema_ref": "T1.relation_graph.v1",
+              "oracle_schema_ref": "T1.relation_oracle.v1",
+              "scoring_profile_ref": "T1.relation_reasoning_with_evidence.v1",
+              "prompt": {
+                "title": "还原相关数据结构的状态模型",
+                "description": "请检查需求相关数据结构是否包含状态字段、状态枚举或状态转换函数。如果存在，请还原合法状态、状态转换边和非法状态检查；如果不存在，也要给出检索证据说明不适用。",
+                "instructions": ["定位状态字段或状态枚举。", "列出状态转换函数和触发条件。", "用 relations 表示 from_state 到 to_state 的转换。", "列出非法状态检查、assert 或错误返回路径。"],
+                "output_requirements": ["必须输出 JSON。", "applicability 可为 not_applicable，但必须有 evidence。", "relations 的 relation_type 使用 transitions_to、rejects_state 或 validates_state。"]
+              }
+            },
+            {
+              "question_id": "T1_DATA_MODEL_004",
+              "coverage_tags": ["data.layout_constraints", "data.structure_discovery"],
+              "coverage_level": "extended",
+              "difficulty": "medium",
+              "question_role": "constraint_extraction",
+              "response_schema_ref": "T1.matrix.v1",
+              "oracle_schema_ref": "T1.matrix_oracle.v1",
+              "scoring_profile_ref": "T1.matrix_boundary_judgment.v1",
+              "prompt": {
+                "title": "识别数据结构的布局和边界约束",
+                "description": "请分析需求相关数据结构是否存在二进制布局、对齐、大小上限、数组长度、版本字段、保留字段或跨进程传输约束。该题对于 IPC 消息体、共享内存结构、ABI 暴露结构尤其重要。",
+                "instructions": ["定位 packed、align、size、length、version、reserved 等约束。", "说明这些约束如何被校验。", "区分 ABI/协议约束和普通内部实现约束。", "若不涉及跨边界传递，请给出证据化不适用判断。"],
+                "output_requirements": ["必须输出 JSON。", "matrix 的 category 使用 size_limit、alignment、versioning、reserved_field、cross_boundary_layout、not_applicable。", "不得凭经验推测二进制兼容要求。"]
+              }
+            },
+            {
+              "question_id": "T1_DATA_MODEL_005",
+              "coverage_tags": ["data.helper_functions", "data.field_semantics"],
+              "coverage_level": "extended",
+              "difficulty": "medium",
+              "question_role": "semantic_inference",
+              "response_schema_ref": "T1.entity_evidence_list.v1",
+              "oracle_schema_ref": "T1.entity_oracle.v1",
+              "scoring_profile_ref": "T1.entity_classification_with_evidence.v1",
+              "prompt": {
+                "title": "通过辅助函数推断数据结构真实语义",
+                "description": "请搜索需求相关数据结构的初始化、复制、序列化、反序列化、比较、哈希、验证、清理或销毁函数，并通过这些函数推断结构体和字段的真实语义。该题强调不要只依赖字段名和注释。",
+                "instructions": ["列出辅助函数及其作用。", "说明每个函数揭示了哪些字段语义或约束。", "区分构造、验证、传输、清理类函数。", "标注字段语义推断来自哪些代码行为。"],
+                "output_requirements": ["必须输出 JSON。", "entities 的 role 使用 initializer、validator、serializer、deserializer、comparator、cleanup。", "summary 中说明最关键的语义推断。"]
+              }
+            }
           ]
         },
-        "职责边界": {
-          "description": "准确区分内核、用户态服务、客户端库、驱动服务之间的分工和约束",
+        "控制流与调用链追踪": {
+          "score_weight": 13,
+          "description": "追踪请求从入口、分发、处理到返回的完整执行路径，覆盖正常分支、异常分支和异步路径。",
+          "coverage_map": [
+            {"coverage_id": "control.entry_to_core", "name": "入口到核心处理", "goal": "追踪从入口函数到核心处理函数的正常路径。"},
+            {"coverage_id": "control.dispatch", "name": "分发机制", "goal": "理解 syscall、IPC、服务路由、回调表或函数指针分发。"},
+            {"coverage_id": "control.success_branch", "name": "成功路径", "goal": "完整描述成功路径的关键节点和返回语义。"},
+            {"coverage_id": "control.failure_branch", "name": "失败路径", "goal": "覆盖参数错误、权限不足、资源不足、目标不存在等异常分支。"},
+            {"coverage_id": "control.async_path", "name": "异步路径", "goal": "识别工作队列、事件通知、回调、后台任务和延迟完成路径。"},
+            {"coverage_id": "control.cross_layer", "name": "跨层控制流", "goal": "识别客户端库、用户态服务、驱动服务、内核之间的控制流边界。"}
+          ],
           "questions": [
-            "通过阅读 baseline 代码，识别该系统是如何划分内核态和用户态的。查找以下证据：内核态代码的特征（如特权指令使用、内核数据结构、地址空间管理）、用户态服务的特征（如 IPC 客户端模式、服务注册机制）、客户端库的特征（如 API 封装、非特权代码）。基于这些证据，分析该需求的功能应如何跨层次分配。",
-            "在 baseline 中搜索与该需求相关的现有功能实现，判断其当前放在哪个架构层次，评估是否符合微内核最小化原则。如果在代码中发现职责越界的迹象（如用户态逻辑出现在内核模块中），请指出具体代码位置。",
-            "请通过阅读 baseline 中的架构文档（如有）、代码注释和目录划分，总结该系统对各架构层次（内核/用户态服务/客户端库/驱动服务）的职责定义。然后分析该需求应如何在这些层次间分配计算和通信逻辑。"
+            {
+              "question_id": "T1_CONTROL_FLOW_001",
+              "coverage_tags": ["control.entry_to_core", "control.success_branch"],
+              "coverage_level": "core",
+              "difficulty": "medium",
+              "question_role": "path_tracing",
+              "response_schema_ref": "T1.ordered_trace.v1",
+              "oracle_schema_ref": "T1.ordered_trace_oracle.v1",
+              "scoring_profile_ref": "T1.ordered_trace_with_branches.v1",
+              "prompt": {
+                "title": "追踪需求相关能力的正常调用链",
+                "description": "请选择 baseline 中与需求描述最相关的一个现有入口，追踪从入口函数到核心处理函数再到返回调用者的正常路径。该题只要求还原基线现状，不要求描述新增需求如何接入。",
+                "instructions": ["确定最可信入口。", "按顺序列出关键调用步骤。", "标注每一步所属模块、架构层次和作用。", "说明最终返回或完成的语义。"],
+                "output_requirements": ["必须输出 JSON。", "steps 必须连续编号。", "每一步必须包含 function、path、layer、effect、evidence。"]
+              }
+            },
+            {
+              "question_id": "T1_CONTROL_FLOW_002",
+              "coverage_tags": ["control.dispatch"],
+              "coverage_level": "core",
+              "difficulty": "medium",
+              "question_role": "dispatch_analysis",
+              "response_schema_ref": "T1.ordered_trace.v1",
+              "oracle_schema_ref": "T1.ordered_trace_oracle.v1",
+              "scoring_profile_ref": "T1.ordered_trace_with_branches.v1",
+              "prompt": {
+                "title": "还原请求分发和 handler 选择过程",
+                "description": "请分析需求相关路径中请求如何被分发到具体处理函数。分发机制可能是 syscall 表、IPC 消息表、服务路由、命令分发表、函数指针表、事件回调或插件注册。该题重点考察 Agent 是否能看懂动态或表驱动控制流。",
+                "instructions": ["定位分发表、注册表或路由逻辑。", "说明请求如何匹配到 handler。", "列出动态分发中无法静态完全确认的点。", "不要把最终 handler 之前的包装函数都遗漏。"],
+                "output_requirements": ["必须输出 JSON。", "unresolved_dynamic_dispatch 字段必须存在，可为空数组。", "branches 中记录不同消息、命令或事件分支。"]
+              }
+            },
+            {
+              "question_id": "T1_CONTROL_FLOW_003",
+              "coverage_tags": ["control.failure_branch", "control.success_branch"],
+              "coverage_level": "core",
+              "difficulty": "medium",
+              "question_role": "branch_coverage",
+              "response_schema_ref": "T1.ordered_trace.v1",
+              "oracle_schema_ref": "T1.ordered_trace_oracle.v1",
+              "scoring_profile_ref": "T1.ordered_trace_with_branches.v1",
+              "prompt": {
+                "title": "覆盖成功路径和关键失败路径",
+                "description": "请围绕需求相关基线路径，同时描述成功路径和关键失败路径。失败路径至少考虑参数校验失败、权限不足、目标不存在、资源不足、服务不可用或超时中实际存在的分支；不存在的分支要说明未找到证据。",
+                "instructions": ["先给出成功路径。", "再列出代码中实际存在的失败分支。", "为每个分支给出触发条件、处理函数和返回语义。", "不要为了覆盖模板而编造未出现的失败分支。"],
+                "output_requirements": ["必须输出 JSON。", "branches 中每个分支必须有 condition、effect、evidence。", "summary 中说明最重要的失败传播方式。"]
+              }
+            },
+            {
+              "question_id": "T1_CONTROL_FLOW_004",
+              "coverage_tags": ["control.async_path"],
+              "coverage_level": "extended",
+              "difficulty": "medium",
+              "question_role": "async_path_tracing",
+              "response_schema_ref": "T1.ordered_trace.v1",
+              "oracle_schema_ref": "T1.ordered_trace_oracle.v1",
+              "scoring_profile_ref": "T1.ordered_trace_with_branches.v1",
+              "prompt": {
+                "title": "判断并追踪异步处理路径",
+                "description": "请检查需求相关能力在 baseline 中是否存在异步处理路径，例如回调注册、事件通知、工作队列、后台任务、延迟完成、future/promise 或完成中断。如果不存在，也应给出证据化的不适用判断。",
+                "instructions": ["搜索异步原语和注册点。", "如果存在，追踪从提交请求到完成通知的路径。", "如果不存在，说明同步完成路径和排除依据。", "区分异步执行和普通多函数同步调用。"],
+                "output_requirements": ["必须输出 JSON。", "applicability 必须明确 applicable 或 not_applicable。", "steps 或 not_applicable_conditions 必须有代码证据。"]
+              }
+            },
+            {
+              "question_id": "T1_CONTROL_FLOW_005",
+              "coverage_tags": ["control.cross_layer", "control.dispatch"],
+              "coverage_level": "stress",
+              "difficulty": "advanced",
+              "question_role": "cross_layer_trace",
+              "response_schema_ref": "T1.ordered_trace.v1",
+              "oracle_schema_ref": "T1.ordered_trace_oracle.v1",
+              "scoring_profile_ref": "T1.ordered_trace_with_branches.v1",
+              "prompt": {
+                "title": "追踪跨架构层次的控制流边界",
+                "description": "请分析需求相关基线路径中是否存在跨层控制流，例如客户端库到用户态服务、用户态服务到内核、驱动服务到核心服务、工具层到管理服务。该题要求明确每次跨层边界在哪里、通过什么机制跨越、各层做什么。",
+                "instructions": ["列出跨层边界节点。", "标注跨层机制，例如函数调用、IPC、syscall、共享队列或事件。", "说明每层在控制流中的职责。", "如果路径只在单层内完成，给出证据说明。"],
+                "output_requirements": ["必须输出 JSON。", "steps 中 layer 不能缺失。", "branches 中记录跨层失败或返回路径。"]
+              }
+            }
           ]
         },
-        "中文注释理解": {
-          "description": "准确理解代码中中文注释、中文 TODO、中文文档注释的实际含义",
+        "数据流与生命周期追踪": {
+          "score_weight": 13,
+          "description": "追踪数据或资源从创建、初始化、传递、状态变更、持久化到释放回收的完整生命周期。",
+          "coverage_map": [
+            {"coverage_id": "lifecycle.object_selection", "name": "关键对象选择", "goal": "选择最能代表需求相关机制的数据对象或资源对象。"},
+            {"coverage_id": "lifecycle.create_init", "name": "创建与初始化", "goal": "识别分配、初始化、注册和默认值设置。"},
+            {"coverage_id": "lifecycle.transfer", "name": "传递与所有权变化", "goal": "识别函数参数、IPC、共享内存、句柄表和所有权转移。"},
+            {"coverage_id": "lifecycle.update_read", "name": "读写与状态变化", "goal": "识别数据何时被读取、更新、派生或缓存。"},
+            {"coverage_id": "lifecycle.persist_cache", "name": "持久化与缓存", "goal": "判断是否存在持久化、日志、缓存、失效或恢复机制。"},
+            {"coverage_id": "lifecycle.release_cleanup", "name": "释放与异常清理", "goal": "识别释放路径、清理路径和失败回滚。"}
+          ],
           "questions": [
-            "请在 baseline 代码中搜索与该需求相关的所有中文注释（包括 // 和 /* */ 注释、TODO、FIXME、HACK 标记）。阅读并总结这些中文注释传达的技术信息，将其转译为明确的技术要点。注意区分注释中的事实描述和开发者的主观评注。",
-            "在 baseline 相关模块中，是否存在中文命名（拼音变量名/函数名、中文字符串常量、中文配置项）？请列出你找到的中文标识符，并解释每个标识符在代码上下文中的实际含义。",
-            "对比 baseline 中同一模块内的中英文注释，检查它们描述的逻辑是否一致。如果发现中英文注释描述不一致的地方，请指出并分析哪种语言版本更可能反映真实的代码意图。"
+            {
+              "question_id": "T1_LIFECYCLE_001",
+              "coverage_tags": ["lifecycle.object_selection", "lifecycle.create_init", "lifecycle.release_cleanup"],
+              "coverage_level": "core",
+              "difficulty": "medium",
+              "question_role": "lifecycle_tracing",
+              "response_schema_ref": "T1.lifecycle_trace.v1",
+              "oracle_schema_ref": "T1.lifecycle_oracle.v1",
+              "scoring_profile_ref": "T1.lifecycle_completeness.v1",
+              "prompt": {
+                "title": "追踪关键对象从创建到释放的完整生命周期",
+                "description": "请选择与需求描述最相关的一个或多个关键数据对象，追踪它们在 baseline 中从创建、初始化、使用到释放的完整生命周期。该题重点考察 Agent 是否能找到对象生命周期的首尾，而不是只看中间处理逻辑。",
+                "instructions": ["说明为什么选择这些对象。", "列出 create、init、validate、release、cleanup 等步骤。", "为每一步标注函数、路径、所有者和证据。", "若对象由外部传入而非本模块创建，请说明入口所有权。"],
+                "output_requirements": ["必须输出 JSON。", "lifecycle_steps 必须包含 step_type。", "cleanup_paths 必须说明正常清理和异常清理。"]
+              }
+            },
+            {
+              "question_id": "T1_LIFECYCLE_002",
+              "coverage_tags": ["lifecycle.transfer", "lifecycle.update_read"],
+              "coverage_level": "core",
+              "difficulty": "medium",
+              "question_role": "ownership_reasoning",
+              "response_schema_ref": "T1.lifecycle_trace.v1",
+              "oracle_schema_ref": "T1.lifecycle_oracle.v1",
+              "scoring_profile_ref": "T1.lifecycle_completeness.v1",
+              "prompt": {
+                "title": "分析数据传递路径和所有权变化",
+                "description": "请分析需求相关数据如何在 baseline 中跨函数、模块、进程或服务传递。重点识别传递方式、所有者、借用者、引用计数或句柄表变化。该题要求把数据流和所有权一起说明。",
+                "instructions": ["列出数据从来源到消费者的路径。", "标注每次 transfer 的机制和所有权变化。", "说明哪些函数只读、哪些函数修改、哪些函数接管释放责任。", "如果不存在所有权转移，也要给出证据说明是借用或只读。"],
+                "output_requirements": ["必须输出 JSON。", "ownership_transfers 必须包含 from、to、mechanism、ownership_after。", "不能把值传递和所有权转移混为一谈。"]
+              }
+            },
+            {
+              "question_id": "T1_LIFECYCLE_003",
+              "coverage_tags": ["lifecycle.persist_cache"],
+              "coverage_level": "extended",
+              "difficulty": "medium",
+              "question_role": "applicability_assessment",
+              "response_schema_ref": "T1.lifecycle_trace.v1",
+              "oracle_schema_ref": "T1.lifecycle_oracle.v1",
+              "scoring_profile_ref": "T1.lifecycle_completeness.v1",
+              "prompt": {
+                "title": "判断相关数据是否持久化、缓存或记录日志",
+                "description": "请检查需求相关数据在 baseline 中是否会被持久化、缓存、写入日志、发布事件或进入统计系统。该题允许回答不适用，但必须说明你检查了哪些文件读写、配置存储、缓存表、日志或事件路径。",
+                "instructions": ["搜索持久化、缓存、日志和事件发布代码。", "说明触发时机和一致性语义。", "如果存在缓存，说明失效或刷新方式。", "如果不存在，给出 not_applicable 的代码证据。"],
+                "output_requirements": ["必须输出 JSON。", "lifecycle_steps 的 step_type 使用 persist、cache 或 not_applicable。", "summary 中说明是否具有崩溃恢复语义。"]
+              }
+            },
+            {
+              "question_id": "T1_LIFECYCLE_004",
+              "coverage_tags": ["lifecycle.release_cleanup", "lifecycle.create_init"],
+              "coverage_level": "extended",
+              "difficulty": "medium",
+              "question_role": "cleanup_path_analysis",
+              "response_schema_ref": "T1.lifecycle_trace.v1",
+              "oracle_schema_ref": "T1.lifecycle_oracle.v1",
+              "scoring_profile_ref": "T1.lifecycle_completeness.v1",
+              "prompt": {
+                "title": "分析失败路径中的资源清理和回滚",
+                "description": "请围绕需求相关对象，分析 baseline 中初始化失败、中途错误、取消或超时时的资源清理路径。该题评估 Agent 是否能理解异常生命周期，而不是只描述成功路径。",
+                "instructions": ["定位可能失败的分配、注册、发送或校验点。", "追踪失败后释放了哪些已获得资源。", "识别 goto cleanup、defer、析构注册、引用计数减少或回滚函数。", "指出是否存在未覆盖的清理风险。"],
+                "output_requirements": ["必须输出 JSON。", "cleanup_paths 中每条必须包含 failure_point、cleanup_action、evidence。", "不要把理论风险当成基线事实。"]
+              }
+            },
+            {
+              "question_id": "T1_LIFECYCLE_005",
+              "coverage_tags": ["lifecycle.update_read", "lifecycle.transfer"],
+              "coverage_level": "stress",
+              "difficulty": "advanced",
+              "question_role": "dataflow_trace",
+              "response_schema_ref": "T1.lifecycle_trace.v1",
+              "oracle_schema_ref": "T1.lifecycle_oracle.v1",
+              "scoring_profile_ref": "T1.lifecycle_completeness.v1",
+              "prompt": {
+                "title": "构建关键数据的端到端数据流图",
+                "description": "请为需求相关关键数据构建端到端数据流图，从数据来源、校验、转换、跨边界传递、消费到释放或保留。该题重点考察 Agent 是否能综合多模块上下文形成数据流视角。",
+                "instructions": ["选择一个主要数据对象作为主线。", "列出所有重要读写、转换和传递节点。", "标注每个节点的数据格式或语义变化。", "说明数据最终被释放、缓存、持久化还是交给外部所有者。"],
+                "output_requirements": ["必须输出 JSON。", "lifecycle_steps 和 ownership_transfers 都必须填写。", "summary 中用一句话描述端到端数据流。"]
+              }
+            }
+          ]
+        },
+        "职责边界与分层约束理解": {
+          "score_weight": 11,
+          "description": "准确区分内核、用户态服务、客户端库、驱动服务和工具层的分工，体现微内核最小化原则与策略/机制分离。",
+          "coverage_map": [
+            {"coverage_id": "boundary.layer_responsibility", "name": "分层职责", "goal": "识别各架构层次对相关能力承担的职责。"},
+            {"coverage_id": "boundary.negative_responsibility", "name": "禁止职责", "goal": "明确哪些逻辑不应由某层承担。"},
+            {"coverage_id": "boundary.policy_mechanism", "name": "策略与机制分离", "goal": "区分策略逻辑、机制逻辑和封装逻辑。"},
+            {"coverage_id": "boundary.cross_layer_exception", "name": "跨层例外", "goal": "识别 fast-path、直接调用或绕过常规边界的例外及其理由。"},
+            {"coverage_id": "boundary.security_isolation", "name": "安全与隔离边界", "goal": "识别进程、服务、权限令牌、IPC 通道和配置隔离。"}
+          ],
+          "questions": [
+            {
+              "question_id": "T1_BOUNDARY_001",
+              "coverage_tags": ["boundary.layer_responsibility", "boundary.negative_responsibility"],
+              "coverage_level": "core",
+              "difficulty": "medium",
+              "question_role": "boundary_judgment",
+              "response_schema_ref": "T1.matrix.v1",
+              "oracle_schema_ref": "T1.matrix_oracle.v1",
+              "scoring_profile_ref": "T1.matrix_boundary_judgment.v1",
+              "prompt": {
+                "title": "建立相关能力的分层职责矩阵",
+                "description": "请基于 baseline 代码，为需求相关能力建立分层职责矩阵。矩阵应说明内核核心、用户态服务、驱动服务、客户端库、工具层或项目实际层次分别负责什么、不负责什么，以及证据来自哪里。",
+                "instructions": ["覆盖所有实际参与或可能误判为参与的层次。", "填写 responsibility 和 not_responsibility。", "用代码证据支持职责判断。", "如果某层不存在或不适用，使用 not_applicable 并说明证据。"],
+                "output_requirements": ["必须输出 JSON。", "matrix 每行必须包含 subject、category、responsibility、not_responsibility、evidence。", "不得只写理论职责。"]
+              }
+            },
+            {
+              "question_id": "T1_BOUNDARY_002",
+              "coverage_tags": ["boundary.policy_mechanism"],
+              "coverage_level": "core",
+              "difficulty": "medium",
+              "question_role": "architecture_reasoning",
+              "response_schema_ref": "T1.matrix.v1",
+              "oracle_schema_ref": "T1.matrix_oracle.v1",
+              "scoring_profile_ref": "T1.matrix_boundary_judgment.v1",
+              "prompt": {
+                "title": "区分策略逻辑、机制逻辑和封装逻辑",
+                "description": "请判断需求相关 baseline 代码中哪些逻辑属于机制，哪些属于策略，哪些只是客户端或工具层封装。该题用于评估 Agent 是否理解微内核风格下的职责分配，而不是按代码量或目录名机械分类。",
+                "instructions": ["列出机制逻辑、策略逻辑、封装逻辑的代码位置。", "说明每类逻辑为什么放在当前层次。", "指出哪些逻辑如果放错层会构成职责越界。", "无法判断时标注 low confidence。"],
+                "output_requirements": ["必须输出 JSON。", "matrix 的 category 使用 mechanism、policy、wrapper、adapter。", "exceptions 中记录难以分类的代码。"]
+              }
+            },
+            {
+              "question_id": "T1_BOUNDARY_003",
+              "coverage_tags": ["boundary.cross_layer_exception"],
+              "coverage_level": "extended",
+              "difficulty": "medium",
+              "question_role": "exception_analysis",
+              "response_schema_ref": "T1.entity_evidence_list.v1",
+              "oracle_schema_ref": "T1.entity_oracle.v1",
+              "scoring_profile_ref": "T1.entity_classification_with_evidence.v1",
+              "prompt": {
+                "title": "识别跨层调用或边界例外",
+                "description": "请检查需求相关 baseline 路径中是否存在绕过常规 IPC 或服务边界的特殊路径，例如 fast-path、直接函数调用、共享内存快捷路径或特权内部接口。该题允许回答不存在，但必须给出检查证据。",
+                "instructions": ["搜索跨层直接调用、共享状态和特殊路径。", "说明例外是否存在及其触发条件。", "若存在，解释代码中如何限制其使用范围。", "若不存在，说明常规边界如何被维护。"],
+                "output_requirements": ["必须输出 JSON。", "entities 的 role 使用 fast_path、direct_call、shared_state、not_applicable。", "不得把普通跨文件调用误判为跨层例外。"]
+              }
+            },
+            {
+              "question_id": "T1_BOUNDARY_004",
+              "coverage_tags": ["boundary.security_isolation", "boundary.layer_responsibility"],
+              "coverage_level": "extended",
+              "difficulty": "medium",
+              "question_role": "security_boundary",
+              "response_schema_ref": "T1.relation_graph.v1",
+              "oracle_schema_ref": "T1.relation_oracle.v1",
+              "scoring_profile_ref": "T1.relation_reasoning_with_evidence.v1",
+              "prompt": {
+                "title": "分析相关能力的安全与隔离边界",
+                "description": "请分析需求相关能力在 baseline 中依赖哪些安全或隔离边界，例如进程边界、服务边界、权限令牌、IPC 通道、句柄表、地址空间或配置隔离。该题重点考察 Agent 是否能把职责边界和安全边界联系起来。",
+                "instructions": ["列出边界实体。", "用 relations 表示调用者如何跨越或被限制在边界内。", "说明每个边界由哪段代码建立或检查。", "区分架构边界和权限边界。"],
+                "output_requirements": ["必须输出 JSON。", "relations 的 relation_type 使用 isolates、authorizes、routes_through、blocks 或 shares_with。", "summary 中说明最关键边界。"]
+              }
+            }
+          ]
+        },
+        "权限、错误与异常语义理解": {
+          "score_weight": 8,
+          "description": "理解权限检查、安全边界、错误码、异常路径、资源耗尽和服务不可用等处理语义。",
+          "coverage_map": [
+            {"coverage_id": "error.permission_check", "name": "权限检查", "goal": "识别调用者身份、capability、句柄或权限规则检查。"},
+            {"coverage_id": "error.input_validation", "name": "输入校验", "goal": "识别参数范围、空值、ID 有效性和格式校验。"},
+            {"coverage_id": "error.failure_classification", "name": "失败分类", "goal": "区分输入、权限、资源、目标不存在、服务不可用和内部故障。"},
+            {"coverage_id": "error.propagation", "name": "错误传播", "goal": "追踪错误从底层到调用者的传播和转换。"},
+            {"coverage_id": "error.observable_effect", "name": "可观测错误行为", "goal": "识别返回码、日志、事件、统计或用户提示。"}
+          ],
+          "questions": [
+            {
+              "question_id": "T1_ERROR_001",
+              "coverage_tags": ["error.permission_check"],
+              "coverage_level": "core",
+              "difficulty": "medium",
+              "question_role": "security_check_extraction",
+              "response_schema_ref": "T1.entity_evidence_list.v1",
+              "oracle_schema_ref": "T1.entity_oracle.v1",
+              "scoring_profile_ref": "T1.entity_classification_with_evidence.v1",
+              "prompt": {
+                "title": "定位相关路径上的权限检查和安全校验",
+                "description": "请在 baseline 中查找需求相关路径上的权限检查、安全校验、调用者身份判断、capability 检查、句柄验证或服务隔离检查。该题重点考察 Agent 是否能找到实际执行安全判断的位置。",
+                "instructions": ["列出权限检查函数或代码分支。", "说明检查依据的凭证、上下文或对象。", "说明失败时返回或传播的错误。", "若路径无需权限检查，给出代码证据说明原因。"],
+                "output_requirements": ["必须输出 JSON。", "entities 的 kind 使用 permission_check、capability_check、handle_validation、identity_check 或 not_applicable。", "每个检查必须有失败语义。"]
+              }
+            },
+            {
+              "question_id": "T1_ERROR_002",
+              "coverage_tags": ["error.input_validation", "error.failure_classification"],
+              "coverage_level": "core",
+              "difficulty": "medium",
+              "question_role": "failure_mode_matrix",
+              "response_schema_ref": "T1.matrix.v1",
+              "oracle_schema_ref": "T1.matrix_oracle.v1",
+              "scoring_profile_ref": "T1.matrix_boundary_judgment.v1",
+              "prompt": {
+                "title": "分类需求相关路径的失败模式",
+                "description": "请围绕需求相关 baseline 路径，分类实际存在的失败模式。至少检查输入非法、权限不足、目标不存在、重复操作、资源不足、服务不可用、通信失败和超时等类别；不存在的类别要说明未找到证据。",
+                "instructions": ["列出实际存在的 failure_type。", "为每类失败给出触发条件、检测位置和错误结果。", "区分直接产生的错误和下游透传错误。", "不要为了覆盖列表而编造失败模式。"],
+                "output_requirements": ["必须输出 JSON。", "matrix 的 category 使用 failure_type。", "exceptions 中记录未找到证据的类别。"]
+              }
+            },
+            {
+              "question_id": "T1_ERROR_003",
+              "coverage_tags": ["error.propagation"],
+              "coverage_level": "extended",
+              "difficulty": "medium",
+              "question_role": "path_tracing",
+              "response_schema_ref": "T1.ordered_trace.v1",
+              "oracle_schema_ref": "T1.ordered_trace_oracle.v1",
+              "scoring_profile_ref": "T1.ordered_trace_with_branches.v1",
+              "prompt": {
+                "title": "追踪错误码或异常状态的传播链",
+                "description": "请选择需求相关路径中一个重要错误，追踪它从产生位置到最终调用者可见位置的传播链。重点识别错误是否被转换、包装、吞掉、重试或记录。",
+                "instructions": ["选择一个有代表性的错误。", "按顺序列出错误产生、传播、转换和返回步骤。", "标注每一步的函数、路径和错误值。", "如果错误被统一处理器转换，也要纳入路径。"],
+                "output_requirements": ["必须输出 JSON。", "steps 的 effect 字段应说明错误如何变化。", "branches 中记录可能的重试或降级路径。"]
+              }
+            },
+            {
+              "question_id": "T1_ERROR_004",
+              "coverage_tags": ["error.observable_effect", "error.failure_classification"],
+              "coverage_level": "extended",
+              "difficulty": "medium",
+              "question_role": "observable_behavior",
+              "response_schema_ref": "T1.matrix.v1",
+              "oracle_schema_ref": "T1.matrix_oracle.v1",
+              "scoring_profile_ref": "T1.matrix_boundary_judgment.v1",
+              "prompt": {
+                "title": "识别异常路径的外部可观测行为",
+                "description": "请分析需求相关异常路径是否会产生外部可观测行为，例如返回码、日志、事件、统计计数、用户提示、管理接口状态或监控指标。该题帮助评估 Agent 是否理解错误不只是内部控制流。",
+                "instructions": ["列出可观测行为类型。", "说明由哪个错误或分支触发。", "给出写日志、发事件、计数或返回状态的代码证据。", "若无外部可观测行为，给出证据化说明。"],
+                "output_requirements": ["必须输出 JSON。", "matrix 的 category 使用 return_code、log、event、metric、user_message、not_applicable。", "不要把调试注释当成运行时可观测行为。"]
+              }
+            }
+          ]
+        },
+        "并发与资源管理理解": {
+          "score_weight": 8,
+          "description": "理解锁、原子操作、引用计数、资源池、配额、清理路径和泄漏防护模式。",
+          "coverage_map": [
+            {"coverage_id": "concurrency.primitive", "name": "并发原语", "goal": "识别锁、原子变量、RCU、信号量、队列或单线程事件循环。"},
+            {"coverage_id": "concurrency.protected_data", "name": "受保护数据", "goal": "理解哪些数据由哪些并发机制保护。"},
+            {"coverage_id": "concurrency.lock_order", "name": "加锁顺序", "goal": "识别加锁/解锁位置、顺序和持锁调用风险。"},
+            {"coverage_id": "resource.allocation_release", "name": "资源分配释放", "goal": "识别资源来源、释放责任和异常清理。"},
+            {"coverage_id": "resource.refcount_ownership", "name": "引用计数与所有权", "goal": "理解引用增加、减少、归零释放和延迟释放。"},
+            {"coverage_id": "resource.quota_limit", "name": "配额与限制", "goal": "识别资源池、配额、上限和耗尽处理。"}
+          ],
+          "questions": [
+            {
+              "question_id": "T1_CONCURRENCY_001",
+              "coverage_tags": ["concurrency.primitive", "concurrency.protected_data"],
+              "coverage_level": "core",
+              "difficulty": "medium",
+              "question_role": "concurrency_extraction",
+              "response_schema_ref": "T1.relation_graph.v1",
+              "oracle_schema_ref": "T1.relation_oracle.v1",
+              "scoring_profile_ref": "T1.relation_reasoning_with_evidence.v1",
+              "prompt": {
+                "title": "识别相关数据的并发保护机制",
+                "description": "请在 baseline 中搜索需求相关数据或对象的并发保护机制，包括互斥锁、读写锁、自旋锁、原子变量、RCU、信号量、队列、actor/event loop 或单线程调度约束。该题允许回答不适用，但必须给出证据。",
+                "instructions": ["列出并发原语和定义位置。", "用 relations 说明原语保护哪些数据或代码区域。", "说明加锁和解锁位置。", "如果通过单线程事件循环避免共享并发，也应说明。"],
+                "output_requirements": ["必须输出 JSON。", "relations 的 relation_type 使用 protects、serializes、guards、not_applicable。", "不得把任意全局变量都假定为需要锁保护。"]
+              }
+            },
+            {
+              "question_id": "T1_CONCURRENCY_002",
+              "coverage_tags": ["concurrency.lock_order"],
+              "coverage_level": "extended",
+              "difficulty": "advanced",
+              "question_role": "lock_order_analysis",
+              "response_schema_ref": "T1.ordered_trace.v1",
+              "oracle_schema_ref": "T1.ordered_trace_oracle.v1",
+              "scoring_profile_ref": "T1.ordered_trace_with_branches.v1",
+              "prompt": {
+                "title": "分析加锁顺序和持锁调用约束",
+                "description": "请分析需求相关路径中的加锁顺序、解锁位置和持锁调用约束。重点识别是否存在持锁调用外部接口、持锁阻塞、锁顺序反转或跨上下文访问约束。该题不要求发现新 bug，只要求准确理解基线约束。",
+                "instructions": ["列出加锁和解锁步骤。", "标注持锁期间调用了哪些函数。", "说明是否存在嵌套锁或锁顺序约定。", "无法确认锁顺序时标注 unresolved_dynamic_dispatch 或 low confidence。"],
+                "output_requirements": ["必须输出 JSON。", "steps 中 effect 应说明 lock、unlock、call_while_locked。", "branches 中记录异常路径是否释放锁。"]
+              }
+            },
+            {
+              "question_id": "T1_RESOURCE_001",
+              "coverage_tags": ["resource.allocation_release"],
+              "coverage_level": "core",
+              "difficulty": "medium",
+              "question_role": "resource_management",
+              "response_schema_ref": "T1.lifecycle_trace.v1",
+              "oracle_schema_ref": "T1.lifecycle_oracle.v1",
+              "scoring_profile_ref": "T1.lifecycle_completeness.v1",
+              "prompt": {
+                "title": "梳理相关资源的分配、释放和异常清理",
+                "description": "请围绕需求相关资源，梳理资源来自哪里、何时分配、谁负责释放、分配失败如何处理、部分初始化失败如何清理。资源可以是内存、句柄、对象池项、IPC 缓冲区、文件描述符、服务连接或内部 token。",
+                "instructions": ["列出资源类型和分配位置。", "追踪正常释放路径。", "追踪失败路径中的清理动作。", "说明资源泄漏防护模式，例如 goto cleanup、defer、析构注册或引用计数。"],
+                "output_requirements": ["必须输出 JSON。", "objects 和 cleanup_paths 不能为空。", "不能只说有释放，要指出具体释放函数或清理语句。"]
+              }
+            },
+            {
+              "question_id": "T1_RESOURCE_002",
+              "coverage_tags": ["resource.refcount_ownership"],
+              "coverage_level": "extended",
+              "difficulty": "medium",
+              "question_role": "ownership_reasoning",
+              "response_schema_ref": "T1.lifecycle_trace.v1",
+              "oracle_schema_ref": "T1.lifecycle_oracle.v1",
+              "scoring_profile_ref": "T1.lifecycle_completeness.v1",
+              "prompt": {
+                "title": "理解引用计数、所有权转移和延迟释放",
+                "description": "请检查需求相关对象是否使用引用计数、所有权转移、借用引用、句柄表持有、延迟释放或后台回收。若存在，请说明引用增加、减少、归零释放和并发安全；若不存在，请给出证据说明所有权模型。",
+                "instructions": ["定位 refcount 或等效所有权机制。", "列出引用增加和减少的位置。", "说明归零时的释放动作。", "区分强引用、弱引用、借用引用或句柄持有。"],
+                "output_requirements": ["必须输出 JSON。", "ownership_transfers 必须说明 ownership_after。", "若 not_applicable，summary 必须说明替代所有权模型。"]
+              }
+            },
+            {
+              "question_id": "T1_RESOURCE_003",
+              "coverage_tags": ["resource.quota_limit", "resource.allocation_release"],
+              "coverage_level": "extended",
+              "difficulty": "medium",
+              "question_role": "limit_semantics",
+              "response_schema_ref": "T1.matrix.v1",
+              "oracle_schema_ref": "T1.matrix_oracle.v1",
+              "scoring_profile_ref": "T1.matrix_boundary_judgment.v1",
+              "prompt": {
+                "title": "识别资源池、配额、限制和耗尽处理",
+                "description": "请判断需求相关基线能力是否涉及资源池、配额、最大数量、缓冲区限制、速率限制或耗尽处理。该题允许不适用，但必须说明你检查了哪些常量、配置项、分配路径和错误分支。",
+                "instructions": ["列出资源限制或配额定义。", "说明限制如何被检查。", "说明耗尽时的错误或降级行为。", "若无配额或限制，给出证据化说明。"],
+                "output_requirements": ["必须输出 JSON。", "matrix 的 category 使用 pool、quota、max_limit、buffer_limit、rate_limit、not_applicable。", "evidence 必须指向定义或检查位置。"]
+              }
+            }
           ]
         }
       }
