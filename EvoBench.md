@@ -325,7 +325,7 @@ CLI / Editor (入口)
 
   Tool 执行:
     好: read 正确读取了 resource_mgr 的核心文件, grep 找到了关键结构体
-        [可观测] read 命中 ground truth 修改文件, grep 找到关键符号
+        [可观测] 对 T3 而言, read 命中真实影响链路中的关键修改文件或依赖文件, grep 找到关键符号
     坏: read 返回"文件不存在"或"无权限", grep 返回空结果
         [可观测] tool 执行失败率高, 或虽成功但返回了无关内容
 
@@ -1096,11 +1096,13 @@ diagnosis:
 
 | 能力 | 微内核场景下的"好" | 场景痛点 | 主要依赖的组件 |
 |------|-------------------|---------|---------------|
-| **T1 基线代码理解** | 准确区分内核态/用户态模块、理解 IPC 接口契约、识别 capability 机制、正确解析中文注释 | 代码库规模大、微内核架构不同于 Linux、中文注释可能引起语义偏差 | Tool(read/grep), LLM Call, System Prompt |
+| **T1 基线代码理解** | 基于需求语义定位并解释 baseline 中当前存在的模块、接口、调用链、数据结构、生命周期和约束边界，不预测未来改动 | 代码库规模大、微内核架构不同于 Linux、需求相关代码分散在内核、用户态服务、客户端库和构建配置中 | Tool(read/grep), LLM Call, System Prompt |
 | **T2 需求理解** | 准确理解中文技术需求中的微内核术语、"配额查询"="query"非"modify"、识别隐藏的约束 | 中文需求可能有歧义、需求文档中英混排 | CLI/入口, System Prompt |
-| **T3 影响分析** | 准确预测 IPC 消息变更影响的范围、识别需要修改的用户态服务、不误判为内核修改 | IPC 链路的"涟漪效应"复杂、多服务模块间依赖关系隐蔽 | Agent 编排(runLoop), Tool, Sub-agent |
+| **T3 影响分析** | 在 T1 式 baseline 事实基础上，准确预测需求实现将修改、扩展、间接影响或保持不变的模块、接口、控制流、数据流、测试和兼容性风险 | IPC 链路的"涟漪效应"复杂、多服务模块间依赖关系隐蔽，容易把当前相关模块误判为必改模块 | Agent 编排(runLoop), Tool, Sub-agent |
 | **T4 方案设计** | 设计遵循微内核最小化原则、职责层次正确(内核/服务/库)、接口设计不违反 IPC 规范 | 架构约束严格(不能把用户态逻辑放内核)、设计空间受限于闭源接口 | LLM Call, System Prompt, Agent 编排 |
 | **T5 编码实现** | 代码风格与基线一致、正确使用闭源 API 和宏、编译通过率 100%、正确处理中文注释 | 闭源 API 不可搜索外部文档、需从基线代码推测用法、交叉编译环境复杂 | Tool(write/edit), LLM Call, MCP/Plugin |
+
+> **T1/T3 边界**: T1 回答"当前 baseline 是什么、如何工作、边界在哪里"；T3 回答"为了实现需求，预计会改什么、影响什么、哪些相关位置应保持不变"。T3 可以引用 T1 式事实作为证据，但不能把相关事实罗列直接等同为影响分析。
 
 #### 4.0.2 以五项能力为中心的各组件优化目标
 
@@ -1114,7 +1116,7 @@ diagnosis:
 | **Agent 定义/权限** | T3, T5 | **工具权限恰到好处**: (1) 能读取所有相关模块代码 (T3/T4) (2) 能编辑正确位置 (用户态服务不可误写内核, vice versa) | `OverConstraintRate` < 0.1 (不阻止必要的代码读/写) + `MisplacedEditRate` < 0.05 (不写入错误层) | 安全保护 vs 开发效率 |
 | **System Prompt 合成** | T1, T3, T4 | **注入微内核架构约束**: System Prompt 必须传达以下关键约束: (1) 内核/用户态职责分离原则 (2) IPC 接口契约 (3) capability 安全模型 (4) 代码注释的中文风格指南。这些约束若无注入, Agent 可能设计出违反架构的方案 | `MicrokernelConstraintScore` (0~1) — LLM-as-Judge: System Prompt 是否包含了正确的架构约束 | 约束充分 vs Prompt 长度 |
 | **任务编排 (runLoop)** | T1, T3, T4 | **合适的探索-设计-实现顺序**: Agent 在特性开发中应遵循: 读相关代码 → 理解现有接口 → 分析影响 → 设计方案 → 实现。**不应跳过读代码直接设计, 也不应过度探索而不产出** | `DevWorkflowCoverage` (0~1) — Agent 在开发过程中是否覆盖了 "理解→分析→设计→实现" 的完整工作流; `SkipDesignRate` (0~1) — 直接编码而未先设计 | 探索充分 vs 尽早产出 |
-| **Tool 执行** | T1, T5 | (1) **read/grep 准确命中关键模块**: 能正确读取内核 IPC 头文件、用户态服务代码等 (2) **write/edit 符合代码风格**: 写入的代码符合该微内核的编码规范 | `CodebaseHitRate` — 读取的文件是否属于 ground truth 修改范围; `CodeStyleCompliance` — 代码风格与基线一致性 | 代码读取广度 vs 专注度 |
+| **Tool 执行** | T1, T3, T5 | (1) **T1 read/grep 准确命中需求相关 baseline 证据**: 能正确读取现有模块、接口、调用点和约束来源 (2) **T3 跨模块读取支撑影响预测**: 能覆盖真实改动链路上的关键依赖与引用位置 (3) **T5 write/edit 符合代码风格** | `BaselineEvidenceHitRate` — T1 读取的文件是否覆盖 oracle 中的 baseline 事实证据; `ImpactEvidenceCoverage` — T3 是否读取到支撑真实影响面的关键依赖/引用; `CodeStyleCompliance` — 代码风格与基线一致性 | 代码读取广度 vs 专注度 |
 | **LLM Call** | T1, T2, T3, T4, T5 | **对微内核概念的理解深度和生成质量**: (1) 理解 capability、IPC、service domain 等微内核特有概念 (2) 生成的代码遵循闭源 API 的使用方式 (3) 中文注释风格与基线一致 (4) 推理链包含架构层面的考量 | `MicrokernelConceptAccuracy` (0~1) — LLM-as-Judge: 对微内核概念的理解准确度; `APIMatchRate` — 使用的 API 是否真实存在; `ChineseCommentStyleScore` — 注释风格与基线一致度 | 模型推理深度 vs 推理成本 |
 | **Sub-agent** | T3, T4 | **按模块边界恰当地分解**: 微内核特性开发天然可按层分解——内核改动、用户态服务改动、客户端库改动。sub-agent 应按此边界分解任务, 各层并行分析后再汇总 | `LayerBasedDecompScore` (0~1) — sub-agent 分解是否按微内核的"内核/服务/库"分层; `CrossLayerConsistency` — 各层结果组合后是否自洽 | 分解粒度 vs 汇总一致性 |
 | **MCP/Plugin** | T1, T5 | **构建与调试工具链可靠**: 提供微内核的交叉编译环境、测试运行器等基础设施工具的稳定访问 | `BuildToolStability` — 构建工具调用成功率; `TestExecSuccessRate` — 测试执行成功率 | 工具丰富性 vs 稳定性 |
@@ -1161,9 +1163,9 @@ diagnosis:
 #### 4.0.5 各组件优化目标与 T 能力映射索引
 
 ```
-T1 (基线理解) ← 主要受: Tool(read/grep命中率) + Compaction(架构信息保真) + LLM Call(概念理解)
+T1 (基线理解) ← 主要受: Tool(baseline事实证据命中率) + Compaction(架构信息保真) + LLM Call(概念理解)
 T2 (需求理解) ← 主要受: CLI/入口(中文术语精度) + System Prompt(微内核术语定义)
-T3 (影响分析) ← 主要受: Agent编排(探索覆盖率) + Sub-agent(按层分解) + Tool(跨模块读取)
+T3 (影响分析) ← 主要受: Agent编排(影响链路探索覆盖率) + Sub-agent(按层分解) + Tool(跨模块依赖/引用读取)
 T4 (方案设计) ← 主要受: LLM Call(架构推理) + System Prompt(约束注入) + Agent编排(设计-实现顺序)
 T5 (编码实现) ← 主要受: Tool(write/edit代码风格) + LLM Call(API正确性) + MCP/Plugin(构建工具)
 ```

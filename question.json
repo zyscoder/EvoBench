@@ -1,15 +1,21 @@
 {
   "meta": {
-    "description": "AI Benchmark 预置问题库 —— 需求无关的通用评估提问。T1 聚焦基线代码库知识理解，采用 schema-first 结构化题库：按模块架构、构建入口、接口契约、数据结构、控制流、数据流、职责边界、权限异常、并发资源九个可量化子项组织，每个子项通过 coverage_map 充分覆盖有价值的问题切面。",
-    "version": "5.0",
+    "description": "AI Benchmark 预置问题库 —— 需求无关的通用评估提问。T1 聚焦需求锚定的基线代码库事实理解，采用 schema-first 结构化题库：按模块架构、构建入口、接口契约、数据结构、控制流、数据流、职责边界、权限异常、并发资源九个可量化子项组织，每个子项通过 coverage_map 充分覆盖有价值的问题切面。T3 聚焦基于 baseline 事实的变更影响预测，与 T1 保持明确边界。",
+    "version": "5.1",
     "language": "zh-CN",
     "design_principle": "每个问题均为需求无关的通用问题，可适用于任意新特性需求。AI 对该闭源微内核操作系统无任何预训练知识，必须通过探索 baseline 代码获取信息。评测时将 [需求描述] + [预置问题] 组合为完整请求。",
-    "key_constraint": "问题设计中不预设 AI 知道任何模块名、函数名、数据结构名或架构细节——这些都需要 AI 从代码中自行发现和确认。"
+    "key_constraint": "问题设计中不预设 AI 知道任何模块名、函数名、数据结构名或架构细节——这些都需要 AI 从代码中自行发现和确认。",
+    "t1_t3_boundary": "T1 可使用需求描述作为代码探索锚点，但只评估 baseline 当前事实：当前相关模块、接口、调用链、数据结构、生命周期和约束边界是什么。T1 不预测真实修改文件、接口新增方案、测试范围或实现风险。T3 在 T1 式事实基础上评估变更影响预测：为了实现需求，哪些模块、文件、接口、配置、测试、控制流和数据流可能需要修改、扩展、间接受影响或保持不变。"
   },
   "capabilities": {
     "T1_基线代码库知识理解": {
       "name": "T1 - Baseline 代码库知识理解能力",
-      "description": "衡量 AI 仅凭阅读 baseline 代码与随附文档，能否准确掌握现有系统的架构、接口、运行机制和约束边界。T1 采用 schema-first 的结构化问答设计：题面必须详细清楚，回答和 oracle 必须结构化，便于实体、分类、关系、顺序和证据级评分。",
+      "description": "衡量 AI 仅凭阅读 baseline 代码与随附文档，能否准确掌握现有系统的架构、接口、运行机制和约束边界。T1 采用 schema-first 的结构化问答设计：题面必须详细清楚，回答和 oracle 必须结构化，便于实体、分类、关系、顺序和证据级评分。T1 的需求描述只作为定位现有代码事实的语义锚点，禁止把答案写成预计修改点、实现方案或影响范围预测。",
+      "response_boundary": {
+        "allowed_focus": ["baseline_current_fact", "module_role", "interface_contract", "call_flow", "data_lifecycle", "responsibility_boundary", "error_permission_semantics", "concurrency_resource_constraint"],
+        "forbidden_focus": ["likely_modified_files", "future_interface_design", "implementation_plan", "impact_prediction", "test_scope_prediction", "risk_mitigation_plan"],
+        "scoring_note": "T1 oracle 来自 baseline 代码事实和专家标注，不以真实 feature diff 的修改文件命中率作为评分依据。"
+      },
       "schema_templates": {
         "T1.entity_evidence_list.v1": {
           "description": "用于模块、文件、接口、数据结构、配置项、错误码、锁等实体识别任务。",
@@ -101,7 +107,7 @@
             {"coverage_id": "module.keyword_extraction", "name": "需求关键词抽取", "goal": "从需求描述中抽取可用于代码检索的中英文关键词、对象名、动作和同义表达。"},
             {"coverage_id": "module.candidate_discovery", "name": "候选模块发现", "goal": "从目录、文件名、符号、构建目标和文档中发现候选模块。"},
             {"coverage_id": "module.layer_classification", "name": "架构层次分类", "goal": "区分内核核心、用户态服务、驱动服务、客户端库、工具层和项目实际分层。"},
-            {"coverage_id": "module.primary_secondary_split", "name": "核心与辅助模块区分", "goal": "区分主实现位置、封装层、适配层、测试/文档/构建辅助位置。"},
+            {"coverage_id": "module.primary_secondary_split", "name": "核心与辅助模块区分", "goal": "区分 baseline 中已经存在的主实现位置、封装层、适配层、测试/文档/构建辅助位置，不预测未来修改位置。"},
             {"coverage_id": "module.dependency_relation", "name": "模块依赖关系", "goal": "识别相关模块之间的 include、构建、调用或 IPC 依赖。"},
             {"coverage_id": "module.negative_filtering", "name": "误命中排除", "goal": "识别名称相似但语义无关的目录、文件或符号。"},
             {"coverage_id": "module.ownership_boundary", "name": "代码所有权边界", "goal": "判断相关能力在基线代码中的所有权归属和边界。"}
@@ -118,9 +124,9 @@
               "scoring_profile_ref": "T1.entity_classification_with_evidence.v1",
               "prompt": {
                 "title": "定位需求相关的基线模块与架构层次",
-                "description": "请基于需求描述和 baseline 代码，定位当前系统中与该需求语义最相关的目录、模块、文件和关键符号。该任务只评估你对基线代码库现状的理解，不要求设计或实现新功能。请特别避免把所有能力默认归入内核，必须用代码证据区分内核核心、用户态服务、驱动服务、客户端库、工具层或项目中实际存在的其他层次。",
+                "description": "请基于需求描述和 baseline 代码，定位当前系统中与该需求语义最相关的目录、模块、文件和关键符号。该任务只评估你对基线代码库现状的理解，不要求设计、实现新功能或预测真实改动文件。请特别避免把所有能力默认归入内核，必须用代码证据区分内核核心、用户态服务、驱动服务、客户端库、工具层或项目中实际存在的其他层次。",
                 "instructions": ["先抽取用于检索的关键词、动词、对象名和同义表达。", "在 baseline 中定位候选目录、文件、模块和符号。", "将候选项按架构层次和相关角色分类。", "对每个保留项给出 path 或 symbol 级证据。"],
-                "output_requirements": ["必须输出 JSON。", "entities 中必须包含 layer、role、path、symbol、evidence 和 confidence。", "不能确认的候选项保留为 low confidence，不要猜测。"]
+                "output_requirements": ["必须输出 JSON。", "entities 中必须包含 layer、role、path、symbol、evidence 和 confidence。", "不能确认的候选项保留为 low confidence，不要猜测。", "不得输出 future_change、likely_modified_files、implementation_plan 等 T3/T4 内容。"]
               }
             },
             {
@@ -134,9 +140,9 @@
               "scoring_profile_ref": "T1.entity_classification_with_evidence.v1",
               "prompt": {
                 "title": "区分主实现模块、辅助模块和边界外模块",
-                "description": "请围绕需求描述相关能力，在 baseline 中区分哪些代码位置是主实现位置，哪些只是客户端封装、配置适配、工具入口、测试/示例或文档辅助位置，哪些候选项虽然名称相似但不属于该能力边界。该题重点考察 Agent 是否能控制探索范围，而不是简单罗列搜索结果。",
+                "description": "请围绕需求描述相关能力，在 baseline 中区分哪些代码位置是现有主实现位置，哪些只是客户端封装、配置适配、工具入口、测试/示例或文档辅助位置，哪些候选项虽然名称相似但不属于该能力边界。该题重点考察 Agent 是否能控制 baseline 事实探索范围，而不是简单罗列搜索结果或预测未来修改范围。",
                 "instructions": ["从候选模块中标注 primary、secondary、supporting、rejected_candidate 四类角色。", "说明每一类的判定依据，例如调用方向、构建目标、导出接口或服务注册关系。", "对 rejected_candidate 必须说明排除理由。", "如果只有单一主模块，也要说明为何其他层次不承担主职责。"],
-                "output_requirements": ["必须输出 JSON。", "rejected_candidates 不能为空；若确无误命中，填空数组并解释检索范围。", "summary 中用简短中文总结代码所有权边界。"]
+                "output_requirements": ["必须输出 JSON。", "rejected_candidates 不能为空；若确无误命中，填空数组并解释检索范围。", "summary 中用简短中文总结当前代码所有权边界。", "不得把 primary/secondary 解释为未来必须修改/可选修改。"]
               }
             },
             {
@@ -980,20 +986,25 @@
     },
     "T3_影响范围预测": {
       "name": "T3 - 影响范围预测能力",
-      "description": "衡量 AI 在不接触真实实现的情况下，能否准确预见一个系统变更的「涟漪效应」。AI 需通过代码分析来预测影响面。",
+      "description": "衡量 AI 在不接触真实实现的情况下，能否基于需求描述和 baseline 事实准确预见一个系统变更的「涟漪效应」。T3 与 T1 的区别在于：T1 输出当前系统事实，T3 必须进一步输出预计修改、扩展、间接受影响、保持不变和风险判断。AI 需通过代码分析为每个影响预测提供证据。",
+      "response_boundary": {
+        "required_focus": ["baseline_evidence_used", "direct_change_prediction", "indirect_impact_prediction", "no_change_judgment", "interface_change_prediction", "control_data_flow_delta", "compatibility_regression_risk"],
+        "forbidden_focus": ["baseline_fact_only_without_impact_judgment", "full_design_solution", "code_implementation"],
+        "scoring_note": "T3 oracle 主要来自真实 feature commits、代码 diff、接口变更、测试变更和专家补充标注；baseline 事实只作为预测证据。"
+      },
       "sub_items": {
         "模块命中": {
-          "description": "预测该特性会触及哪些内核模块、用户态服务或库组件",
+          "description": "预测该特性会直接修改、行为调整、间接受影响或保持不变的内核模块、用户态服务或库组件",
           "questions": [
-            "请通过以下步骤预测该需求会波及的模块：(1) 在 baseline 代码中搜索与该需求关键词相关的源代码文件；(2) 分析这些文件所属的模块或组件；(3) 根据模块间的 #include 依赖关系、IPC 通信关系和构建依赖关系，推断级联影响。请按照「直接触及」和「间接收影响」两个层级列出模块，并说明每个模块被命中的原因。",
-            "请检查 baseline 代码中是否有全局搜索/引用工具可用？如果有，请搜索与该需求相关的关键符号（函数名、结构体名、IPC 消息类型名）的所有引用位置。基于引用关系，预测该需求变更会触及哪些模块。",
-            "你的模块预测是否考虑了以下因素：(1) 是否需要修改构建配置（Makefile/Kconfig）涉及新的编译单元？(2) 是否需要修改测试代码所在的模块？(3) 是否需要更新文档或示例代码所在的路径？请逐项检查。"
+            "请通过以下步骤预测该需求会波及的模块：(1) 在 baseline 代码中搜索与该需求关键词相关的源代码文件；(2) 分析这些文件所属的模块或组件；(3) 根据模块间的 #include 依赖关系、IPC 通信关系和构建依赖关系，推断级联影响。请按照「预计直接修改」「预计行为调整但不一定修改」「间接受影响」「相关但预计保持不变」四类列出模块，并说明每个模块被归类的原因。",
+            "请检查 baseline 代码中是否有全局搜索/引用工具可用？如果有，请搜索与该需求相关的关键符号（函数名、结构体名、IPC 消息类型名）的所有引用位置。基于引用关系，预测该需求变更会触及哪些模块，并明确区分「当前相关」和「预计需要修改」。",
+            "你的模块预测是否考虑了以下因素：(1) 是否需要修改构建配置（Makefile/Kconfig）涉及新的编译单元？(2) 是否需要修改测试代码所在的模块？(3) 是否需要更新文档或示例代码所在的路径？(4) 是否存在虽然相关但应保持不变的稳定边界模块？请逐项检查。"
           ]
         },
         "文件/组件预测": {
           "description": "给出大致需要修改的目录、逻辑组件或文件类型",
           "questions": [
-            "请预测该需求实现需要修改的文件范围，按以下类别分类：(1) 头文件/接口定义类；(2) 核心逻辑实现类；(3) IPC 协议/消息定义类；(4) 客户端库封装类；(5) 构建配置类；(6) 测试代码类。对每类，请根据 baseline 代码中现有的文件组织模式，推测需要修改的具体目录或文件命名模式。",
+            "请预测该需求实现需要修改的文件范围，按以下类别分类：(1) 头文件/接口定义类；(2) 核心逻辑实现类；(3) IPC 协议/消息定义类；(4) 客户端库封装类；(5) 构建配置类；(6) 测试代码类；(7) 相关但预计不修改的稳定边界类。对每类，请根据 baseline 代码中现有的文件组织模式，推测需要修改的具体目录或文件命名模式，并说明预测依据。",
             "请在 baseline 代码中找一个与该需求规模或类型相似的已有功能的提交历史（如有），分析该历史功能修改了哪些文件。这个信息可以帮助校准你对该需求文件范围的预测。如果没有历史信息可用，请基于代码依赖分析来预测。",
             "除了明显需要修改的源代码文件，以下潜在修改点你是否考虑了：(1) 公共头文件中的数据结构变更可能影响所有引用者；(2) 新增文件需要修改构建系统；(3) IPC 消息编号变更可能影响通信双方。请逐一分析。"
           ]
@@ -1003,7 +1014,7 @@
           "questions": [
             "请通过分析 baseline 代码中现有的接口模式，预测该需求是否需要：(1) 新增系统调用——检查现有的系统调用定义方式；(2) 新增 IPC 消息类型——检查现有的消息类型编号和注册方式；(3) 扩展已有服务 API——检查现有 API 的扩展模式；(4) 修改客户端库——检查客户端库的封装层次。对每个判断，请引用 baseline 中的代码模式作为依据。",
             "如果你预测需要新增 IPC 消息，请基于 baseline 中已有的 IPC 消息定义模式，推测：(1) 消息类型应如何命名和编号？(2) 消息应包含哪些必要字段？(3) 请求和响应消息是否需要配对？(4) 消息是同步处理还是异步处理？不要发明新的模式，应遵循 baseline 中已有的约定。",
-            "该需求是否会导致任何已有的公开接口发生向后不兼容的变更？请列出所有你预测会受到影响的接口，评估不兼容的程度，并基于 baseline 中类似的接口演进来判断这种不兼容是否可接受。"
+            "该需求是否会导致任何已有的公开接口发生向后不兼容的变更？请列出所有你预测会受到影响的接口，评估不兼容的程度，并基于 baseline 中类似的接口演进来判断这种不兼容是否可接受。对于相关但预计保持不变的接口，也请列出并说明为什么不应修改。"
           ]
         },
         "控制流变化": {
@@ -1027,7 +1038,7 @@
           "questions": [
             "请评估该需求对系统兼容性的影响。在评估之前，先在 baseline 代码中查找：(1) 已有的接口版本管理机制；(2) 已有的配置兼容性处理代码；(3) 已有的废弃接口标记（deprecated）。基于这些发现，判断该需求是否有兼容性处理先例可循。",
             "从以下维度逐一评估兼容性风险：(1) ABI 兼容——是否改变已有接口的二进制布局？(2) 协议兼容——是否改变已有 IPC 消息的字段或语义？(3) 行为兼容——是否改变已有接口的运行时行为？(4) 配置兼容——是否需要用户修改配置文件？对每个维度，说明风险等级和判断依据。",
-            "如果该需求必须引入不兼容变更，请基于 baseline 代码中的模式，提出最小化影响范围的策略。例如：是否可以新增接口而非修改旧接口？是否可以通过版本号区分新旧行为？是否可以通过编译时配置控制？"
+            "如果你预测该需求可能引入不兼容变更，请基于 baseline 代码中的模式评估不兼容影响是否可以被局部化。例如：是否更可能通过新增接口而非修改旧接口来降低影响？是否已有版本号、编译时配置或运行时配置可作为兼容性隔离机制？本题只要求影响判断和依据，不要求展开完整设计方案。"
           ]
         }
       }
